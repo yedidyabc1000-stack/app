@@ -53,8 +53,8 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: נגן 1.0.0
+          tag_name: v1.0.1
+          name: נגן 1.0.1
           body: |
             APK להתקנה במכשירי Android 4.4 ומעלה.
             נבנה אוטומטית באמצעות GitHub Actions.
