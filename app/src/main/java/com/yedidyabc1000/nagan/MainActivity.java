@@ -83,8 +83,9 @@ public class MainActivity extends Activity {
         buildInterface();
 
         Window window = getWindow();
-        window.setStatusBarColor(Color.rgb(11, 16, 32));
+        // These APIs were added in Android 5.0; Android 4.4 must not invoke them.
         if (Build.VERSION.SDK_INT >= 21) {
+            window.setStatusBarColor(Color.rgb(11, 16, 32));
             window.setNavigationBarColor(Color.rgb(11, 16, 32));
         }
 
