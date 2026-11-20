@@ -1,0 +1,65 @@
+name: Build NaganMusic44
+on:
+  push:
+    branches:
+      - android44-rebuild
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Reassemble source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p payload
+          cat \
+            .build/parts/part{00..15}.b64 \
+            .build/repack2/16-00.b64 .build/repack2/16-01.b64 .build/repack2/16-02.b64 .build/repack2/16-03.b64 .build/repack2/16-04.b64 .build/repack2/16-05.b64 \
+            .build/repack3/17-00a.b64 .build/repack3/17-00b.b64 \
+            .build/repack2/17-01.b64 .build/repack2/17-02.b64 .build/repack2/17-03.b64 \
+            .build/repack3/17-04a.b64 .build/repack3/17-04b.b64 \
+            .build/repack2/17-05.b64 \
+            .build/repack3/18-00a.b64 .build/repack3/18-00b.b64 \
+            .build/repack2/18-01.b64 .build/repack2/18-02.b64 .build/repack2/18-03.b64 \
+            .build/repack3/18-04a.b64 .build/repack3/18-04b.b64 \
+            .build/repack2/18-05.b64 \
+            .build/parts/part19.b64 | base64 --decode > payload/NaganMusic44.zip
+          unzip -t payload/NaganMusic44.zip
+          unzip -q payload/NaganMusic44.zip -d payload/source
+
+      - name: Build APK
+        run: |
+          cd payload/source/NaganMusic44
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: nagan-android44-debug-apk
+          path: payload/source/NaganMusic44/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
