@@ -12,13 +12,6 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Matrix;
-import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.RectF;
-import android.graphics.Shader;
-import android.graphics.BitmapShader;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.util.Log;
@@ -42,6 +35,7 @@ import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.SeekBar;
@@ -136,7 +130,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private ArrayList<Entry> visibleEntries = new ArrayList<Entry>();
 
     private LinearLayout nowPlayingRoot;
-    private RoundArtView nowArt;
+    private ImageView nowArt;
     private TextView nowTitle;
     private TextView nowArtist;
     private TextView nowAlbum;
@@ -1132,10 +1126,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         content.setPadding(dp(12), 0, dp(12), 0);
 
         FrameLayout artHolder = new FrameLayout(this);
-        nowArt = new RoundArtView(this);
-        Bitmap art = currentSong == null ? null : loadArtwork(currentSong);
-        nowArt.setBitmap(art == null
-                ? BitmapFactory.decodeResource(getResources(), R.drawable.albumart_mp_unknown_new) : art);
+        nowArt = new ImageView(this);
+        nowArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        nowArt.setBackgroundDrawable(roundRect(0xffe5e8eb, 8));
+        nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 1f);
         artParams.bottomMargin = dp(2);
@@ -1159,21 +1153,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration));
         seekBar.setProgress(player != null ? safePosition() : 0);
 
-        android.graphics.drawable.GradientDrawable bg = roundRect(0xffd4d9de, 2);
-        bg.setSize(-1, dp(2));
-        android.graphics.drawable.GradientDrawable fill = roundRect(COLOR_ACCENT, 2);
-        fill.setSize(-1, dp(2));
-        android.graphics.drawable.ClipDrawable clipped = new android.graphics.drawable.ClipDrawable(
-                fill, Gravity.LEFT, android.graphics.drawable.ClipDrawable.HORIZONTAL);
-        android.graphics.drawable.LayerDrawable layers =
-                new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{bg, clipped});
-        layers.setId(0, android.R.id.background);
-        layers.setId(1, android.R.id.progress);
-        seekBar.setProgressDrawable(layers);
-        android.graphics.drawable.GradientDrawable thumb = roundRect(0xff202020, 5);
-        thumb.setSize(dp(9), dp(9));
-        seekBar.setThumb(thumb);
-        seekBar.setPadding(dp(3), 0, dp(3), 0);
+        // Use the platform SeekBar drawable. Custom LayerDrawables can behave
+        // inconsistently on older vendor Android 4.4 builds.
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) { }
             @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; }
@@ -1200,7 +1181,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         controls.setGravity(Gravity.CENTER);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setPadding(0, dp(1), 0, dp(1));
-        TransportButton previous = new TransportButton(this, false);
+        TextView previous = text("◀", 25, 0xff27343b, true);
+        previous.setGravity(Gravity.CENTER);
+        previous.setFocusable(true);
         previous.setContentDescription("השיר הקודם; לחיצה ארוכה: הרצה אחורה");
         previous.setBackgroundDrawable(roundRect(0xffe7ecef, 24));
         previous.setOnClickListener(new View.OnClickListener() {
@@ -1220,7 +1203,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         });
         controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
-        TransportButton next = new TransportButton(this, true);
+        TextView next = text("▶", 25, 0xff27343b, true);
+        next.setGravity(Gravity.CENTER);
+        next.setFocusable(true);
         next.setContentDescription("השיר הבא; לחיצה ארוכה: הרצה קדימה");
         next.setBackgroundDrawable(roundRect(0xffe7ecef, 24));
         next.setOnClickListener(new View.OnClickListener() {
@@ -1234,7 +1219,31 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         nowPlayingRoot.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(nowPlayingRoot);
+        loadArtworkAsync(currentSong, nowArt);
         updatePlayerButtons();
+    }
+
+    private void loadArtworkAsync(final Song song, final ImageView target) {
+        if (song == null || target == null) return;
+        final long songId = song.id;
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                final Bitmap bitmap = loadArtwork(song);
+                if (bitmap == null) return;
+                handler.post(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing() || currentSong == null || currentSong.id != songId
+                                || nowArt != target) {
+                            if (!bitmap.isRecycled()) bitmap.recycle();
+                            return;
+                        }
+                        target.setImageBitmap(bitmap);
+                    }
+                });
+            }
+        }, "nagan-artwork");
+        worker.setPriority(Thread.MIN_PRIORITY);
+        worker.start();
     }
 
     private void installHoldSeek(View control, final int direction) {
@@ -1383,45 +1392,116 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (queueIndex < 0 || queueIndex >= queue.size()) return;
         releasePlayer();
         currentSong = queue.get(queueIndex);
+        final MediaPlayer newPlayer = new MediaPlayer();
         try {
-            player = new MediaPlayer();
-            player.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            player.setOnPreparedListener(this);
-            player.setOnCompletionListener(this);
-            player.setOnErrorListener(this);
+            newPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            newPlayer.setOnPreparedListener(this);
+            newPlayer.setOnCompletionListener(this);
+            newPlayer.setOnErrorListener(this);
             if (currentSong.uri != null) {
-                player.setDataSource(this, currentSong.uri);
+                newPlayer.setDataSource(this, currentSong.uri);
             } else if (currentSong.path != null) {
-                player.setDataSource(currentSong.path);
+                newPlayer.setDataSource(currentSong.path);
             } else {
                 throw new java.io.IOException("Missing audio file location");
             }
-            player.prepareAsync();
-            Toast.makeText(this, currentSong.title, Toast.LENGTH_SHORT).show();
+            player = newPlayer;
         } catch (Exception error) {
-            Log.e(TAG, "Could not prepare audio track", error);
-            Toast.makeText(this, "לא ניתן לנגן את הקובץ", Toast.LENGTH_SHORT).show();
-            releasePlayer();
+            Log.e(TAG, "Could not set audio source for track " + currentSong.id, error);
+            try { newPlayer.release(); } catch (Exception ignored) { }
+            player = null;
+            Toast.makeText(this, "לא ניתן לפתוח את קובץ השמע", Toast.LENGTH_LONG).show();
+            return;
         }
+
         showingNowPlaying = true;
         try {
             renderNowPlaying();
         } catch (RuntimeException error) {
             Log.e(TAG, "Could not render now-playing screen", error);
-            Toast.makeText(this, "השיר נבחר, אך מסך הנגן נתקל בשגיאה", Toast.LENGTH_LONG).show();
-            showingNowPlaying = false;
-            activeTab = lastContentTab;
-            renderBrowser();
+            // Audio remains independent from the artwork and player UI.
+            try { renderSafeNowPlaying(); }
+            catch (RuntimeException fallbackError) {
+                Log.e(TAG, "Fallback player screen failed", fallbackError);
+                showingNowPlaying = false;
+                activeTab = lastContentTab;
+                renderBrowser();
+            }
+        }
+
+        try {
+            newPlayer.prepareAsync();
+        } catch (RuntimeException error) {
+            Log.e(TAG, "prepareAsync failed for track " + currentSong.id, error);
+            releasePlayer();
+            Toast.makeText(this, "לא ניתן להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
         }
         updatePlayerButtons();
     }
 
+    /** Minimal controls-only fallback: playback must not depend on artwork rendering. */
+    private void renderSafeNowPlaying() {
+        activeTab = TAB_NOW_PLAYING;
+        showingNowPlaying = true;
+        LinearLayout safeRoot = new LinearLayout(this);
+        safeRoot.setOrientation(LinearLayout.VERTICAL);
+        safeRoot.setGravity(Gravity.CENTER);
+        safeRoot.setPadding(dp(16), dp(16), dp(16), dp(16));
+        safeRoot.setBackgroundColor(COLOR_BG);
+
+        TextView title = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 20, COLOR_TEXT, true);
+        title.setGravity(Gravity.CENTER);
+        safeRoot.addView(title, new LinearLayout.LayoutParams(-1, dp(48)));
+        TextView artist = text(currentSong == null ? "" : currentSong.artist, 15, COLOR_SUB, false);
+        artist.setGravity(Gravity.CENTER);
+        safeRoot.addView(artist, new LinearLayout.LayoutParams(-1, dp(36)));
+
+        LinearLayout controls = new LinearLayout(this);
+        controls.setGravity(Gravity.CENTER);
+        TextView previous = text("◀", 26, COLOR_TEXT, true);
+        previous.setGravity(Gravity.CENTER);
+        previous.setBackgroundDrawable(roundRect(0xffe7ecef, 22));
+        previous.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { playPrevious(); }
+        });
+        controls.addView(previous, new LinearLayout.LayoutParams(dp(58), dp(52)));
+        ImageButton play = controlImage(isPlaying()
+                ? R.drawable.ic_media_pause_new : R.drawable.ic_media_play_new);
+        play.setBackgroundDrawable(roundRect(COLOR_ACCENT, 26));
+        play.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { togglePlayback(); }
+        });
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(54), dp(54));
+        playParams.leftMargin = dp(16);
+        playParams.rightMargin = dp(16);
+        controls.addView(play, playParams);
+        TextView next = text("▶", 26, COLOR_TEXT, true);
+        next.setGravity(Gravity.CENTER);
+        next.setBackgroundDrawable(roundRect(0xffe7ecef, 22));
+        next.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { playNext(true); }
+        });
+        controls.addView(next, new LinearLayout.LayoutParams(dp(58), dp(52)));
+        safeRoot.addView(controls, new LinearLayout.LayoutParams(-1, dp(70)));
+        setContentView(safeRoot);
+        nowPlayButton = play;
+        miniPlay = null;
+        nowArt = null;
+        seekBar = null;
+        elapsedText = null;
+        durationText = null;
+        updatePlayerButtons();
+    }
+
     @Override public void onPrepared(MediaPlayer mp) {
-        if (mp != player) return;
+        if (mp == null || mp != player) return;
         try {
             mp.start();
-            recordPlay(currentSong);
-        } catch (IllegalStateException ignored) { }
+            if (currentSong != null) recordPlay(currentSong);
+        } catch (RuntimeException error) {
+            Log.e(TAG, "MediaPlayer start failed", error);
+            Toast.makeText(this, "המכשיר לא הצליח להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
+        }
         updatePlayerButtons();
     }
 
@@ -1433,8 +1513,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     @Override public boolean onError(MediaPlayer mp, int what, int extra) {
-        Toast.makeText(this, "שגיאה בהשמעת השיר", Toast.LENGTH_SHORT).show();
-        releasePlayer();
+        Log.e(TAG, "MediaPlayer error: what=" + what + ", extra=" + extra);
+        Toast.makeText(this, "שגיאה בהשמעת השיר (" + what + "/" + extra + ")", Toast.LENGTH_LONG).show();
+        if (mp == player) releasePlayer();
         updatePlayerButtons();
         return true;
     }
@@ -1496,9 +1577,15 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private void releasePlayer() {
         if (player != null) {
-            try { player.reset(); } catch (Exception ignored) { }
-            try { player.release(); } catch (Exception ignored) { }
+            MediaPlayer old = player;
             player = null;
+            try {
+                old.setOnPreparedListener(null);
+                old.setOnCompletionListener(null);
+                old.setOnErrorListener(null);
+            } catch (Exception ignored) { }
+            try { old.reset(); } catch (Exception ignored) { }
+            try { old.release(); } catch (Exception ignored) { }
         }
     }
 
@@ -1728,49 +1815,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         static Entry action(String title, String subtitle, int actionId) { return new Entry(TYPE_ACTION, title, subtitle, actionId); }
     }
 
-    private static class TransportButton extends View {
-        private final boolean next;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        TransportButton(Activity context, boolean next) {
-            super(context);
-            this.next = next;
-            setFocusable(true);
-            setClickable(true);
-        }
-        @Override protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            float unit = getResources().getDisplayMetrics().density;
-            float cx = getWidth() / 2f;
-            float cy = getHeight() / 2f;
-            paint.setColor(0xff27343b);
-            paint.setStyle(Paint.Style.FILL);
-            Path triangle = new Path();
-            if (next) {
-                triangle.moveTo(cx - 5f * unit, cy - 10f * unit);
-                triangle.lineTo(cx - 5f * unit, cy + 10f * unit);
-                triangle.lineTo(cx + 7f * unit, cy);
-                canvas.drawRoundRect(cx + 9f * unit, cy - 10f * unit,
-                        cx + 12f * unit, cy + 10f * unit, unit, unit, paint);
-            } else {
-                triangle.moveTo(cx + 5f * unit, cy - 10f * unit);
-                triangle.lineTo(cx + 5f * unit, cy + 10f * unit);
-                triangle.lineTo(cx - 7f * unit, cy);
-                canvas.drawRoundRect(cx - 12f * unit, cy - 10f * unit,
-                        cx - 9f * unit, cy + 10f * unit, unit, unit, paint);
-            }
-            triangle.close();
-            canvas.drawPath(triangle, paint);
-        }
-    }
-
-    /** Album-cover renderer: FIT_CENTER sizing with a small rounded corner radius. */
-    private static class RoundArtView extends View {
-        private Bitmap bitmap;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        private final Matrix matrix = new Matrix();
-        private final Path clip = new Path();
-        private final RectF rect = new RectF();
-        RoundArtView(Activity context) { super(context); setLayerType(View.LAYER_TYPE_SOFTWARE, null); }
+}
         void setBitmap(Bitmap bitmap) { this.bitmap = bitmap; invalidate(); }
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
