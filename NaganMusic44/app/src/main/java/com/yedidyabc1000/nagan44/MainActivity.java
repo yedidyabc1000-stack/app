@@ -351,7 +351,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (albumsCursor != null) {
                 int albumIdCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums._ID);
                 int artCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums.ALBUM_ART);
-                int albumArtistCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums.ALBUM_ARTIST);
+                int albumArtistCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums.ARTIST);
                 if (albumIdCol >= 0) {
                     while (albumsCursor.moveToNext()) {
                         long albumId = albumsCursor.getLong(albumIdCol);
