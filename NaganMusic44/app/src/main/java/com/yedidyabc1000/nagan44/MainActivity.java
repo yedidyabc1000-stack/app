@@ -1150,8 +1150,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public boolean onLongClick(View v) {
                 seekDirection = direction;
                 handler.removeCallbacks(heldSeekRunnable);
-                seekBy(direction * 4000);
-                handler.postDelayed(heldSeekRunnable, 220L);
+                seekBy(direction * 2000);
+                handler.postDelayed(heldSeekRunnable, 350L);
                 return true;
             }
         });
