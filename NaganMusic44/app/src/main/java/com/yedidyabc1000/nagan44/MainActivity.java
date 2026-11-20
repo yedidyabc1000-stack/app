@@ -1816,29 +1816,4 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
 }
-        void setBitmap(Bitmap bitmap) { this.bitmap = bitmap; invalidate(); }
-        @Override protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            if (bitmap == null || bitmap.isRecycled()) return;
-            float scale = Math.min((float) getWidth() / bitmap.getWidth(), (float) getHeight() / bitmap.getHeight());
-            float width = bitmap.getWidth() * scale;
-            float height = bitmap.getHeight() * scale;
-            float left = (getWidth() - width) / 2f;
-            float top = (getHeight() - height) / 2f;
-            rect.set(left, top, left + width, top + height);
-            clip.reset();
-            clip.addRoundRect(rect, 6f * getResources().getDisplayMetrics().density,
-                    6f * getResources().getDisplayMetrics().density, Path.Direction.CW);
-            canvas.save();
-            canvas.clipPath(clip);
-            BitmapShader shader = new BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-            matrix.setScale(scale, scale);
-            matrix.postTranslate(left, top);
-            shader.setLocalMatrix(matrix);
-            paint.setShader(shader);
-            canvas.drawRect(rect, paint);
-            paint.setShader(null);
-            canvas.restore();
-        }
-    }
-}
+
