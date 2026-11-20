@@ -2,6 +2,9 @@ package com.yedidyabc1000.nagan44;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.database.ContentObserver;
 import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Intent;
@@ -26,6 +29,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -41,10 +45,15 @@ import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.SeekBar;
 import android.widget.ProgressBar;
+import android.widget.EditText;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -54,6 +63,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.json.JSONException;
 
 /**
  * A small, keyboard-first music player designed for Android 4.4 devices.
@@ -67,6 +79,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int TAB_ARTISTS = 1;
     private static final int TAB_ALBUMS = 2;
     private static final int TAB_PLAYLISTS = 3;
+    private static final int TAB_NOW_PLAYING = 4;
+    private static final int REQUEST_IMPORT_PLAYLIST = 411;
+    private static final int CUSTOM_PLAYLIST_BASE = 1000;
     private static final int COLOR_DARK = 0xff252525;
     private static final int COLOR_BAR = 0xff383838;
     private static final int COLOR_ACCENT = 0xff00b9cc;
@@ -81,6 +96,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private final ArrayList<Song> allSongs = new ArrayList<Song>();
     private final ArrayList<Song> queue = new ArrayList<Song>();
+    private final ArrayList<UserPlaylist> customPlaylists = new ArrayList<UserPlaylist>();
     private final Handler handler = new Handler();
     private final Random random = new Random();
 
@@ -88,6 +104,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private Song currentSong;
     private int queueIndex = -1;
     private int activeTab = TAB_SONGS;
+    private int lastContentTab = TAB_SONGS;
     private int repeatMode = 0; // 0=off, 1=all, 2=one
     private boolean shuffle = false;
     private boolean loading = false;
@@ -124,6 +141,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private TextView shuffleButton;
     private TextView repeatButton;
     private boolean userSeeking = false;
+    private ContentObserver mediaObserver;
+    private final Runnable scanChangedMedia = new Runnable() {
+        @Override public void run() {
+            if (isFinishing() || !hasStoragePermission()) return;
+            detailLevel = 0; parentEntries = null; parentTitle = "";
+            loadLibraryAsync(false);
+        }
+    };
 
     private final Runnable progressRunnable = new Runnable() {
         @Override public void run() {
@@ -153,6 +178,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         handler.post(progressRunnable);
+        loadUserPlaylists();
         if (hasStoragePermission()) {
             loadLibraryAsync();
         } else {
@@ -194,10 +220,48 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         setContentView(root);
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        if (hasStoragePermission()) {
+            registerMediaObserver();
+            if (allSongs.size() > 0) handler.postDelayed(scanChangedMedia, 700L);
+        }
+    }
+
+    @Override protected void onPause() {
+        unregisterMediaObserver(); handler.removeCallbacks(scanChangedMedia); super.onPause();
+    }
+
+    private void registerMediaObserver() {
+        if (mediaObserver != null || !hasStoragePermission()) return;
+        mediaObserver = new ContentObserver(handler) {
+            @Override public void onChange(boolean selfChange) { onChange(selfChange, null); }
+            @Override public void onChange(boolean selfChange, Uri uri) {
+                handler.removeCallbacks(scanChangedMedia); handler.postDelayed(scanChangedMedia, 1400L);
+            }
+        };
+        try {
+            getContentResolver().registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, mediaObserver);
+            getContentResolver().registerContentObserver(MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI, true, mediaObserver);
+        } catch (RuntimeException error) { Log.w(TAG, "Cannot observe media library", error); }
+    }
+
+    private void unregisterMediaObserver() {
+        if (mediaObserver == null) return;
+        try { getContentResolver().unregisterContentObserver(mediaObserver); } catch (RuntimeException ignored) { }
+        mediaObserver = null;
+    }
+
+    @Override public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_IMPORT_PLAYLIST && resultCode == RESULT_OK && data != null && data.getData() != null) importPlaylistFile(data.getData());
+    }
+
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == REQUEST_STORAGE) {
             if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+                registerMediaObserver();
                 loadLibraryAsync();
             } else {
                 Toast.makeText(this, "נדרשת הרשאת אחסון כדי לסרוק שירים", Toast.LENGTH_LONG).show();
@@ -213,21 +277,22 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
      */
     private int libraryLoadToken = 0;
 
-    private void loadLibraryAsync() {
+    private void loadLibraryAsync() { loadLibraryAsync(true); }
+
+    private void loadLibraryAsync(final boolean showLoading) {
         final int token = ++libraryLoadToken;
         loading = true;
-        renderLoadingScreen();
+        if (showLoading) renderLoadingScreen();
         Thread worker = new Thread(new Runnable() {
             @Override public void run() {
                 final ArrayList<Song> loadedSongs = scanLibrary();
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (isFinishing() || token != libraryLoadToken) return;
-                        allSongs.clear();
-                        allSongs.addAll(loadedSongs);
+                        reconcileLibrary(loadedSongs);
                         loading = false;
-                        renderBrowser();
-                        if (loadedSongs.size() == 0) {
+                        if (showingNowPlaying && currentSong != null) renderNowPlaying(); else renderBrowser();
+                        if (showLoading && loadedSongs.size() == 0) {
                             Toast.makeText(MainActivity.this,
                                     "לא נמצאו שירים במכשיר", Toast.LENGTH_LONG).show();
                         }
@@ -326,6 +391,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         song.albumId = albumIdCol >= 0 ? cursor.getLong(albumIdCol) : -1;
                         song.duration = durationCol >= 0 ? cursor.getLong(durationCol) : 0;
                         song.path = pathCol >= 0 ? cursor.getString(pathCol) : null;
+                        if (!isVisibleAudioPath(song.path)) continue;
                         song.dateAdded = dateCol >= 0 ? cursor.getLong(dateCol) : 0;
                         song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
                         song.albumArtPath = artworkByAlbum.get(song.albumId);
@@ -339,6 +405,42 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (cursor != null) cursor.close();
         }
         return songs;
+    }
+
+    private boolean isVisibleAudioPath(String path) {
+        if (path == null || path.length() == 0) return false;
+        String normalized = path.replace('\\', '/');
+        String lower = normalized.toLowerCase(Locale.US);
+        if (lower.contains("/android/data/") || lower.contains("/android/obb/") || lower.contains("/lost.dir/")) return false;
+        for (String part : normalized.split("/")) if (part.length() > 1 && part.charAt(0) == '.') return false;
+        File parent = new File(path).getParentFile();
+        while (parent != null) {
+            if (parent.getName().startsWith(".") || new File(parent, ".nomedia").exists()) return false;
+            parent = parent.getParentFile();
+        }
+        return true;
+    }
+
+    private void reconcileLibrary(ArrayList<Song> loadedSongs) {
+        HashMap<Long, Song> byId = new HashMap<Long, Song>();
+        for (Song song : loadedSongs) byId.put(song.id, song);
+        Song oldCurrent = currentSong;
+        allSongs.clear(); allSongs.addAll(loadedSongs);
+        if (oldCurrent != null) {
+            Song updated = byId.get(oldCurrent.id);
+            if (updated == null) { releasePlayer(); currentSong = null; queue.clear(); queueIndex = -1; }
+            else currentSong = updated;
+        }
+        ArrayList<Song> updatedQueue = new ArrayList<Song>(); int newIndex = -1;
+        for (int i = 0; i < queue.size(); i++) {
+            Song updated = byId.get(queue.get(i).id);
+            if (updated != null) { if (i == queueIndex) newIndex = updatedQueue.size(); updatedQueue.add(updated); }
+        }
+        queue.clear(); queue.addAll(updatedQueue); queueIndex = currentSong == null ? -1 : newIndex;
+        for (UserPlaylist playlist : customPlaylists) {
+            for (int j = playlist.songIds.size() - 1; j >= 0; j--) if (!byId.containsKey(playlist.songIds.get(j))) playlist.songIds.remove(j);
+        }
+        saveUserPlaylists();
     }
 
     private String clean(String value, String fallback) {
@@ -365,6 +467,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void renderBrowser() {
+        if (detailLevel == 0 && activeTab == TAB_NOW_PLAYING) { renderNowPlaying(); return; }
         showingNowPlaying = false;
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -407,6 +510,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             addTab("אמנים", TAB_ARTISTS);
             addTab("אלבומים", TAB_ALBUMS);
             addTab("פלייליסטים", TAB_PLAYLISTS);
+            addTab("מתנגן עכשיו", TAB_NOW_PLAYING);
             tabsScroll.addView(tabsRow);
             root.addView(tabsScroll, new LinearLayout.LayoutParams(-1, dp(34)));
         }
@@ -451,6 +555,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 handleEntryClick(position);
             }
         });
+        listView.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            @Override public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
+                if (adapter == null || position < 0 || position >= adapter.getCount()) return false;
+                Object selected = adapter.getItem(position);
+                if (!(selected instanceof Entry)) return false;
+                Entry entry = (Entry) selected;
+                if (entry.type != Entry.TYPE_SONG || entry.song == null) return false;
+                showSongActions(entry.song); return true;
+            }
+        });
 
         miniPlayer = createMiniPlayer();
         if (currentSong != null) root.addView(miniPlayer, new LinearLayout.LayoutParams(-1, dp(44)));
@@ -472,8 +586,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 try {
                     if (detailLevel != 0) detailLevel = 0;
                     activeTab = tab;
+                    if (tab != TAB_NOW_PLAYING) lastContentTab = tab;
                     selectedPosition = 0;
-                    renderBrowser();
+                    if (tab == TAB_NOW_PLAYING) renderNowPlaying(); else renderBrowser();
                 } catch (RuntimeException error) {
                     reportUiError("מעבר בין לשוניות", error);
                 }
@@ -508,6 +623,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             ArrayList<AlbumGroup> albums = albumGroups(allSongs);
             for (AlbumGroup a : albums) visibleEntries.add(Entry.album(a.title, artistLabel(a.songs), a.songs));
         } else {
+            visibleEntries.add(Entry.action("יצירת רשימת השמעה", "יצירת פלייליסט חדש באפליקציה", 1));
+            visibleEntries.add(Entry.action("ייבוא רשימת השמעה", "טעינת קובץ M3U או PLS מהמכשיר", 2));
+            for (int i = 0; i < customPlaylists.size(); i++) {
+                UserPlaylist p = customPlaylists.get(i);
+                visibleEntries.add(Entry.playlist(p.name, p.songIds.size() + " שירים", CUSTOM_PLAYLIST_BASE + i));
+            }
             visibleEntries.add(Entry.playlist("המושמעים ביותר", "השירים המושמעים ביותר לפי מספר השמעות", 1));
             visibleEntries.add(Entry.playlist("כל השירים", allSongs.size() + " שירים", 2));
             visibleEntries.add(Entry.playlist("נוספו לאחרונה", "השירים שנוספו למכשיר לאחרונה", 3));
@@ -555,7 +676,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         Entry entry = visibleEntries.get(position);
         if (entry == null) return;
 
-        if (entry.type == Entry.TYPE_SONG) {
+        if (entry.type == Entry.TYPE_ACTION) {
+            if (entry.actionId == 1) promptCreatePlaylist(null);
+            else if (entry.actionId == 2) launchPlaylistPicker();
+        } else if (entry.type == Entry.TYPE_SONG) {
             if (entry.song == null) return;
             ArrayList<Song> playQueue = new ArrayList<Song>();
             for (Entry e : visibleEntries) {
@@ -581,7 +705,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     ? new ArrayList<Song>() : new ArrayList<Song>(entry.songs));
         } else if (entry.type == Entry.TYPE_PLAYLIST) {
             ArrayList<Song> selected = new ArrayList<Song>();
-            if (entry.playlistId == 1) {
+            if (entry.playlistId >= CUSTOM_PLAYLIST_BASE) {
+                int customIndex = entry.playlistId - CUSTOM_PLAYLIST_BASE;
+                if (customIndex >= 0 && customIndex < customPlaylists.size()) selected.addAll(songsForPlaylist(customPlaylists.get(customIndex)));
+            } else if (entry.playlistId == 1) {
                 Map<Long, Integer> counts = getPlayCounts();
                 for (Song s : allSongs) {
                     Integer count = counts.get(s.id);
@@ -607,6 +734,142 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             }
             showTrackList(entry.title, selected);
         }
+    }
+
+    private void showSongActions(final Song song) {
+        final String[] actions = new String[]{"נגן אחרי השיר הנוכחי", "הוסף לרשימת השמעה"};
+        new AlertDialog.Builder(this).setTitle(song.title).setItems(actions, new DialogInterface.OnClickListener() {
+            @Override public void onClick(DialogInterface dialog, int which) { if (which == 0) playAfterCurrent(song); else showAddSongToPlaylist(song); }
+        }).show();
+    }
+
+    private void playAfterCurrent(Song song) {
+        if (song == null) return;
+        if (currentSong == null || queueIndex < 0 || queue.size() == 0) {
+            ArrayList<Song> one = new ArrayList<Song>(); one.add(song); startTrack(one, 0); return;
+        }
+        int insertAt = Math.min(queue.size(), queueIndex + 1);
+        queue.add(insertAt, song);
+        Toast.makeText(this, "השיר נוסף אחרי השיר הנוכחי", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showAddSongToPlaylist(final Song song) {
+        if (customPlaylists.size() == 0) { promptCreatePlaylist(song); return; }
+        final String[] options = new String[customPlaylists.size() + 1];
+        for (int i = 0; i < customPlaylists.size(); i++) options[i] = customPlaylists.get(i).name;
+        options[options.length - 1] = "＋ יצירת רשימת השמעה חדשה";
+        new AlertDialog.Builder(this).setTitle("הוסף לרשימת השמעה").setItems(options, new DialogInterface.OnClickListener() {
+            @Override public void onClick(DialogInterface dialog, int which) {
+                if (which == customPlaylists.size()) promptCreatePlaylist(song); else addSongToPlaylist(customPlaylists.get(which), song);
+            }
+        }).show();
+    }
+
+    private void addSongToPlaylist(UserPlaylist playlist, Song song) {
+        if (playlist == null || song == null) return;
+        if (!playlist.songIds.contains(song.id)) playlist.songIds.add(song.id);
+        saveUserPlaylists();
+        Toast.makeText(this, "נוסף ל־" + playlist.name, Toast.LENGTH_SHORT).show();
+        if (activeTab == TAB_PLAYLISTS && detailLevel == 0) renderBrowser();
+    }
+
+    private void promptCreatePlaylist(final Song firstSong) {
+        final EditText input = new EditText(this); input.setSingleLine(true); input.setHint("שם רשימת ההשמעה"); input.setTextSize(18);
+        new AlertDialog.Builder(this).setTitle("רשימת השמעה חדשה").setView(input).setNegativeButton("ביטול", null)
+                .setPositiveButton("יצירה", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        String name = input.getText().toString().trim();
+                        if (name.length() == 0) { Toast.makeText(MainActivity.this, "יש להזין שם", Toast.LENGTH_SHORT).show(); return; }
+                        UserPlaylist playlist = new UserPlaylist(name);
+                        if (firstSong != null) playlist.songIds.add(firstSong.id);
+                        customPlaylists.add(playlist); saveUserPlaylists();
+                        Toast.makeText(MainActivity.this, "רשימת ההשמעה נוצרה", Toast.LENGTH_SHORT).show();
+                        if (activeTab == TAB_PLAYLISTS && detailLevel == 0) renderBrowser();
+                    }
+                }).show();
+    }
+
+    private void launchPlaylistPicker() {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT); intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("*/*");
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"audio/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl", "text/plain"});
+            startActivityForResult(intent, REQUEST_IMPORT_PLAYLIST);
+        } catch (Exception error) { Toast.makeText(this, "לא ניתן לפתוח בורר קבצים במכשיר", Toast.LENGTH_LONG).show(); }
+    }
+
+    private void importPlaylistFile(Uri uri) {
+        BufferedReader reader = null; ArrayList<Song> selected = new ArrayList<Song>(); String displayName = null;
+        Cursor nameCursor = null;
+        try { nameCursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null); if (nameCursor != null && nameCursor.moveToFirst()) displayName = nameCursor.getString(0); }
+        catch (Exception ignored) { } finally { if (nameCursor != null) nameCursor.close(); }
+        try {
+            InputStream input = getContentResolver().openInputStream(uri);
+            if (input == null) throw new IllegalStateException("קובץ לא זמין");
+            reader = new BufferedReader(new InputStreamReader(input, "UTF-8")); String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim(); if (line.length() == 0 || line.startsWith("#")) continue;
+                if (line.startsWith("File") && line.indexOf('=') > 0) line = line.substring(line.indexOf('=') + 1).trim();
+                Song song = findPlaylistSong(line); if (song != null && !selected.contains(song)) selected.add(song);
+            }
+        } catch (Exception error) { Toast.makeText(this, "לא ניתן לקרוא את קובץ רשימת ההשמעה", Toast.LENGTH_LONG).show(); return; }
+        finally { if (reader != null) try { reader.close(); } catch (Exception ignored) { } }
+        if (selected.size() == 0) { Toast.makeText(this, "לא נמצאו בקובץ שירים שקיימים בספריית הנגן", Toast.LENGTH_LONG).show(); return; }
+        if (displayName == null || displayName.length() == 0) displayName = "רשימה מיובאת";
+        int dot = displayName.lastIndexOf('.'); if (dot > 0) displayName = displayName.substring(0, dot);
+        UserPlaylist playlist = new UserPlaylist(displayName); for (Song song : selected) playlist.songIds.add(song.id);
+        customPlaylists.add(playlist); saveUserPlaylists();
+        Toast.makeText(this, "יובאו " + selected.size() + " שירים", Toast.LENGTH_LONG).show();
+        activeTab = TAB_PLAYLISTS; lastContentTab = TAB_PLAYLISTS; detailLevel = 0; renderBrowser();
+    }
+
+    private Song findPlaylistSong(String rawPath) {
+        if (rawPath == null) return null;
+        String candidate = rawPath.trim().replace('\\', '/');
+        if (candidate.startsWith("file://")) try { candidate = Uri.decode(Uri.parse(candidate).getPath()); } catch (Exception ignored) { }
+        String normalized = candidate.toLowerCase(Locale.US); String fileName = new File(candidate).getName().toLowerCase(Locale.US);
+        for (Song song : allSongs) {
+            if (song.uri != null && song.uri.toString().equalsIgnoreCase(candidate)) return song;
+            if (song.path != null) {
+                String p = song.path.replace('\\', '/'); String lower = p.toLowerCase(Locale.US);
+                if (lower.equals(normalized) || lower.endsWith("/" + normalized) || normalized.endsWith("/" + lower)) return song;
+                if (new File(p).getName().equalsIgnoreCase(fileName)) return song;
+            }
+        }
+        return null;
+    }
+
+    private ArrayList<Song> songsForPlaylist(UserPlaylist playlist) {
+        ArrayList<Song> result = new ArrayList<Song>(); if (playlist == null) return result;
+        HashMap<Long, Song> byId = new HashMap<Long, Song>(); for (Song song : allSongs) byId.put(song.id, song);
+        for (Long id : playlist.songIds) { Song song = byId.get(id); if (song != null) result.add(song); }
+        return result;
+    }
+
+    private void loadUserPlaylists() {
+        customPlaylists.clear(); String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString("user_playlists_v1", "[]");
+        try {
+            JSONArray array = new JSONArray(saved);
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject object = array.optJSONObject(i); if (object == null) continue;
+                UserPlaylist playlist = new UserPlaylist(object.optString("name", "רשימת השמעה"));
+                JSONArray ids = object.optJSONArray("songs");
+                if (ids != null) for (int j = 0; j < ids.length(); j++) { long id = ids.optLong(j, -1L); if (id >= 0) playlist.songIds.add(id); }
+                customPlaylists.add(playlist);
+            }
+        } catch (Exception error) { Log.w(TAG, "Could not load saved playlists", error); }
+    }
+
+    private void saveUserPlaylists() {
+        JSONArray array = new JSONArray();
+        for (UserPlaylist playlist : customPlaylists) {
+            JSONObject object = new JSONObject();
+            try {
+                object.put("name", playlist.name); JSONArray ids = new JSONArray();
+                for (Long id : playlist.songIds) ids.put(id);
+                object.put("songs", ids); array.put(object);
+            } catch (JSONException ignored) { }
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("user_playlists_v1", array.toString()).apply();
     }
 
     private Map<String, ArrayList<Song>> artistIndex() {
@@ -692,110 +955,68 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void renderNowPlaying() {
-        showingNowPlaying = true;
-        nowPlayingRoot = new LinearLayout(this);
-        nowPlayingRoot.setOrientation(LinearLayout.VERTICAL);
-        nowPlayingRoot.setBackgroundColor(COLOR_BG);
-
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(8), 0, dp(8), 0);
-        bar.setBackgroundColor(COLOR_DARK);
-        TextView back = text("‹", 25, 0xffffffff, true);
-        back.setGravity(Gravity.CENTER);
-        back.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { showingNowPlaying = false; renderBrowser(); }
-        });
+        if (activeTab != TAB_NOW_PLAYING) lastContentTab = activeTab;
+        activeTab = TAB_NOW_PLAYING; showingNowPlaying = true;
+        nowPlayingRoot = new LinearLayout(this); nowPlayingRoot.setOrientation(LinearLayout.VERTICAL); nowPlayingRoot.setBackgroundColor(COLOR_BG);
+        LinearLayout bar = new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL); bar.setPadding(dp(8), 0, dp(8), 0); bar.setBackgroundColor(COLOR_DARK);
+        TextView back = text("‹", 25, 0xffffffff, true); back.setGravity(Gravity.CENTER);
+        back.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { activeTab = lastContentTab; showingNowPlaying = false; renderBrowser(); } });
         bar.addView(back, new LinearLayout.LayoutParams(dp(36), -1));
-        TextView title = text("מתנגן כעת", 18, 0xffffffff, true);
-        title.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        bar.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
-        nowPlayingRoot.addView(bar, new LinearLayout.LayoutParams(-1, dp(36)));
+        TextView title = text("מתנגן כעת", 18, 0xffffffff, true); title.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
+        bar.addView(title, new LinearLayout.LayoutParams(0, -1, 1)); nowPlayingRoot.addView(bar, new LinearLayout.LayoutParams(-1, dp(36)));
 
-        LinearLayout details = new LinearLayout(this);
-        details.setOrientation(LinearLayout.HORIZONTAL);
-        details.setGravity(Gravity.CENTER_VERTICAL);
-        details.setPadding(dp(14), dp(7), dp(14), dp(4));
-        nowArt = new RoundArtView(this);
-        Bitmap art = currentSong == null ? null : loadArtwork(currentSong);
+        tabsScroll = new HorizontalScrollView(this); tabsScroll.setHorizontalScrollBarEnabled(false); tabsScroll.setBackgroundColor(0xffdddddd);
+        tabsRow = new LinearLayout(this); tabsRow.setOrientation(LinearLayout.HORIZONTAL);
+        addTab("שירים", TAB_SONGS); addTab("אמנים", TAB_ARTISTS); addTab("אלבומים", TAB_ALBUMS); addTab("פלייליסטים", TAB_PLAYLISTS); addTab("מתנגן עכשיו", TAB_NOW_PLAYING);
+        tabsScroll.addView(tabsRow); nowPlayingRoot.addView(tabsScroll, new LinearLayout.LayoutParams(-1, dp(34))); updateTabs();
+
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(false);
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL); content.setPadding(dp(16), dp(12), dp(16), dp(12));
+        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
+        float density = getResources().getDisplayMetrics().density;
+        int screenWidth = (int)(getResources().getDisplayMetrics().widthPixels / density);
+        int screenHeight = (int)(getResources().getDisplayMetrics().heightPixels / density);
+        int artSize = dp(Math.min(280, Math.min(screenWidth - 40, Math.max(180, screenHeight * 0.52f))));
+        nowArt = new RoundArtView(this); Bitmap art = currentSong == null ? null : loadArtwork(currentSong);
         nowArt.setBitmap(art == null ? BitmapFactory.decodeResource(getResources(), R.drawable.albumart_mp_unknown_new) : art);
-        int artSize = Math.min(dp(112), Math.max(dp(76), getResources().getDisplayMetrics().heightPixels / 3));
-        details.addView(nowArt, new LinearLayout.LayoutParams(artSize, artSize));
-        LinearLayout labels = new LinearLayout(this);
-        labels.setOrientation(LinearLayout.VERTICAL);
-        labels.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        labels.setPadding(dp(12), 0, 0, 0);
-        nowTitle = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 16, COLOR_TEXT, true);
-        nowArtist = text(currentSong == null ? "" : currentSong.artist, 13, COLOR_SUB, false);
-        nowAlbum = text(currentSong == null ? "" : currentSong.album, 12, COLOR_SUB, false);
-        labels.addView(nowTitle, new LinearLayout.LayoutParams(-1, -2));
-        labels.addView(nowArtist, new LinearLayout.LayoutParams(-1, -2));
-        labels.addView(nowAlbum, new LinearLayout.LayoutParams(-1, -2));
-        details.addView(labels, new LinearLayout.LayoutParams(0, -1, 1));
-        nowPlayingRoot.addView(details, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(artSize, artSize); artParams.gravity = Gravity.CENTER_HORIZONTAL; artParams.bottomMargin = dp(14); content.addView(nowArt, artParams);
+        nowTitle = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 19, COLOR_TEXT, true); nowTitle.setGravity(Gravity.CENTER); nowTitle.setMaxLines(2); content.addView(nowTitle, new LinearLayout.LayoutParams(-1, -2));
+        nowArtist = text(currentSong == null ? "" : currentSong.artist, 15, COLOR_SUB, false); nowArtist.setGravity(Gravity.CENTER); content.addView(nowArtist, new LinearLayout.LayoutParams(-1, -2));
+        nowAlbum = text(currentSong == null ? "" : currentSong.album, 13, COLOR_SUB, false); nowAlbum.setGravity(Gravity.CENTER); content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout timeline = new LinearLayout(this);
-        timeline.setOrientation(LinearLayout.VERTICAL);
-        timeline.setPadding(dp(10), 0, dp(10), 0);
-        seekBar = new SeekBar(this);
-        seekBar.setMax(currentSong == null ? 1 : (int) Math.max(1, currentSong.duration));
-        seekBar.setProgress(player != null ? safePosition() : 0);
+        LinearLayout timeline = new LinearLayout(this); timeline.setOrientation(LinearLayout.VERTICAL); timeline.setPadding(dp(4), dp(12), dp(4), dp(4));
+        seekBar = new SeekBar(this); seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration)); seekBar.setProgress(player != null ? safePosition() : 0);
+        android.graphics.drawable.GradientDrawable bg = roundRect(0xffd4d9de, 4); bg.setSize(-1, dp(4));
+        android.graphics.drawable.GradientDrawable fill = roundRect(COLOR_ACCENT, 4); fill.setSize(-1, dp(4));
+        android.graphics.drawable.ClipDrawable clipped = new android.graphics.drawable.ClipDrawable(fill, Gravity.LEFT, android.graphics.drawable.ClipDrawable.HORIZONTAL);
+        android.graphics.drawable.LayerDrawable layers = new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{bg, clipped});
+        layers.setId(0, android.R.id.background); layers.setId(1, android.R.id.progress); seekBar.setProgressDrawable(layers);
+        android.graphics.drawable.GradientDrawable thumb = roundRect(0xff202020, 9); thumb.setSize(dp(15), dp(15)); seekBar.setThumb(thumb); seekBar.setPadding(dp(2), 0, dp(2), 0);
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) { }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) { userSeeking = true; }
-            @Override public void onStopTrackingTouch(SeekBar bar) {
-                userSeeking = false;
-                if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { }
-            }
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) { }
+            @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; }
+            @Override public void onStopTrackingTouch(SeekBar bar) { userSeeking = false; if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { } }
         });
-        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(28)));
-        LinearLayout times = new LinearLayout(this);
-        times.setOrientation(LinearLayout.HORIZONTAL);
-        times.setGravity(Gravity.CENTER_VERTICAL);
-        elapsedText = text(formatTime(player == null ? 0 : safePosition()), 10, COLOR_SUB, false);
-        durationText = text(formatTime(currentSong == null ? 0 : currentSong.duration), 10, COLOR_SUB, false);
-        times.addView(elapsedText, new LinearLayout.LayoutParams(0, -2, 1));
-        durationText.setGravity(Gravity.RIGHT);
-        times.addView(durationText, new LinearLayout.LayoutParams(0, -2, 1));
-        timeline.addView(times, new LinearLayout.LayoutParams(-1, -2));
-        nowPlayingRoot.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
+        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(34)));
+        LinearLayout times = new LinearLayout(this); times.setOrientation(LinearLayout.HORIZONTAL); times.setGravity(Gravity.CENTER_VERTICAL);
+        elapsedText = text(formatTime(player == null ? 0 : safePosition()), 12, COLOR_SUB, false); durationText = text(formatTime(currentSong == null ? 0 : currentSong.duration), 12, COLOR_SUB, false);
+        times.addView(elapsedText, new LinearLayout.LayoutParams(0, -2, 1)); durationText.setGravity(Gravity.RIGHT); times.addView(durationText, new LinearLayout.LayoutParams(0, -2, 1));
+        timeline.addView(times, new LinearLayout.LayoutParams(-1, -2)); content.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
 
-        LinearLayout controls = new LinearLayout(this);
-        controls.setGravity(Gravity.CENTER);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setPadding(dp(6), dp(2), dp(6), dp(5));
-        TextView shuffleControl = controlText(shuffle ? "⇄" : "⇄", shuffle ? COLOR_ACCENT : COLOR_SUB);
-        shuffleButton = shuffleControl;
-        shuffleControl.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { shuffle = !shuffle; updatePlayerButtons(); }
-        });
-        controls.addView(shuffleControl, new LinearLayout.LayoutParams(0, dp(42), 1));
-        ImageButton previous = controlImage(R.drawable.play_previous_normal);
-        previous.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { playPrevious(); }
-        });
-        controls.addView(previous, new LinearLayout.LayoutParams(0, dp(42), 1));
-        nowPlayButton = controlImage(isPlaying() ? R.drawable.ic_media_pause_new : R.drawable.ic_media_play_new);
-        nowPlayButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { togglePlayback(); }
-        });
-        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(0, dp(42), 1));
-        ImageButton next = controlImage(R.drawable.play_next_normal);
-        next.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { playNext(true); }
-        });
-        controls.addView(next, new LinearLayout.LayoutParams(0, dp(42), 1));
-        TextView repeatControl = controlText(repeatMode == 2 ? "1↻" : "↻", repeatMode == 0 ? COLOR_SUB : COLOR_ACCENT);
-        repeatButton = repeatControl;
-        repeatControl.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { repeatMode = (repeatMode + 1) % 3; updatePlayerButtons(); }
-        });
-        controls.addView(repeatControl, new LinearLayout.LayoutParams(0, dp(42), 1));
-        nowPlayingRoot.addView(controls, new LinearLayout.LayoutParams(-1, dp(48)));
-
-        setContentView(nowPlayingRoot);
-        updatePlayerButtons();
+        LinearLayout controls = new LinearLayout(this); controls.setGravity(Gravity.CENTER); controls.setOrientation(LinearLayout.HORIZONTAL); controls.setPadding(0, dp(10), 0, dp(4));
+        TextView shuffleControl = controlText("⇄", shuffle ? COLOR_ACCENT : COLOR_SUB); shuffleButton = shuffleControl;
+        shuffleControl.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { shuffle = !shuffle; updatePlayerButtons(); } });
+        controls.addView(shuffleControl, new LinearLayout.LayoutParams(0, dp(48), 1));
+        ImageButton previous = controlImage(R.drawable.play_previous_normal); previous.setBackgroundDrawable(roundRect(0xffe5e9ec, 26));
+        previous.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { playPrevious(); } }); controls.addView(previous, new LinearLayout.LayoutParams(0, dp(48), 1));
+        nowPlayButton = controlImage(isPlaying() ? R.drawable.ic_media_pause_new : R.drawable.ic_media_play_new); nowPlayButton.setBackgroundDrawable(roundRect(COLOR_ACCENT, 30)); nowPlayButton.setPadding(dp(10), dp(10), dp(10), dp(10));
+        nowPlayButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { togglePlayback(); } }); controls.addView(nowPlayButton, new LinearLayout.LayoutParams(0, dp(54), 1));
+        ImageButton next = controlImage(R.drawable.play_next_normal); next.setBackgroundDrawable(roundRect(0xffe5e9ec, 26));
+        next.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { playNext(true); } }); controls.addView(next, new LinearLayout.LayoutParams(0, dp(48), 1));
+        TextView repeatControl = controlText(repeatMode == 2 ? "1↻" : "↻", repeatMode == 0 ? COLOR_SUB : COLOR_ACCENT); repeatButton = repeatControl;
+        repeatControl.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { repeatMode = (repeatMode + 1) % 3; updatePlayerButtons(); } }); controls.addView(repeatControl, new LinearLayout.LayoutParams(0, dp(48), 1));
+        content.addView(controls, new LinearLayout.LayoutParams(-1, dp(62)));
+        nowPlayingRoot.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(nowPlayingRoot); updatePlayerButtons();
     }
 
     private TextView controlText(String label, int color) {
@@ -1000,9 +1221,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     @Override public void onBackPressed() {
         if (showingNowPlaying) {
-            showingNowPlaying = false;
-            renderBrowser();
-            return;
+            showingNowPlaying = false; activeTab = lastContentTab; renderBrowser(); return;
         }
         if (detailLevel > 1 && parentEntries != null) {
             detailLevel = 1;
@@ -1036,9 +1255,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (keyCode == KeyEvent.KEYCODE_BACK) { onBackPressed(); return true; }
         if (!showingNowPlaying && detailLevel == 0 && (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
             int delta = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1;
-            activeTab = (activeTab + delta + 4) % 4;
-            selectedPosition = 0;
-            renderBrowser();
+            activeTab = (activeTab + delta + 5) % 5;
+            if (activeTab != TAB_NOW_PLAYING) lastContentTab = activeTab;
+            selectedPosition = 0; renderBrowser();
             return true;
         }
         if (showingNowPlaying) {
@@ -1051,6 +1270,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     @Override protected void onDestroy() {
         libraryLoadToken++;
+        unregisterMediaObserver(); handler.removeCallbacks(scanChangedMedia);
         handler.removeCallbacks(progressRunnable);
         releasePlayer();
         super.onDestroy();
@@ -1108,12 +1328,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 row = new LinearLayout(MainActivity.this);
                 row.setOrientation(LinearLayout.VERTICAL);
                 row.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-                row.setPadding(dp(12), dp(5), dp(12), dp(5));
+                row.setPadding(dp(12), dp(8), dp(12), dp(8));
                 row.setBackgroundDrawable(createRowSelector());
                 row.setFocusable(false);
-                title = text("", 15, COLOR_TEXT, true);
+                title = text("", 18, COLOR_TEXT, true);
                 title.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-                subtitle = text("", 11, COLOR_SUB, false);
+                subtitle = text("", 13, COLOR_SUB, false);
                 subtitle.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
                 row.addView(title, new LinearLayout.LayoutParams(-1, -2));
                 row.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
@@ -1127,6 +1347,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             row.setSelected(position == selectedPosition);
             return row;
         }
+    }
+
+    private static class UserPlaylist {
+        final String name; final ArrayList<Long> songIds = new ArrayList<Long>();
+        UserPlaylist(String name) { this.name = name; }
     }
 
     private static class Song {
@@ -1154,21 +1379,28 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         static final int TYPE_ALBUM = 3;
         static final int TYPE_PLAYLIST = 4;
         static final int TYPE_ARTIST_ALBUM = 5;
+        static final int TYPE_ACTION = 6;
         final int type;
         final String title;
         final String subtitle;
         final Song song;
         final ArrayList<Song> songs;
         final int playlistId;
+        final int actionId;
         private Entry(int type, String title, String subtitle, Song song, ArrayList<Song> songs, int playlistId) {
             this.type = type; this.title = title; this.subtitle = subtitle;
-            this.song = song; this.songs = songs; this.playlistId = playlistId;
+            this.song = song; this.songs = songs; this.playlistId = playlistId; this.actionId = 0;
+        }
+        private Entry(int type, String title, String subtitle, int actionId) {
+            this.type = type; this.title = title; this.subtitle = subtitle;
+            this.song = null; this.songs = null; this.playlistId = 0; this.actionId = actionId;
         }
         static Entry song(Song song) { return new Entry(TYPE_SONG, song.title, song.artist + "  •  " + song.album, song, null, 0); }
         static Entry artist(String name, ArrayList<Song> songs) { return new Entry(TYPE_ARTIST, name, songs.size() + " שירים", null, songs, 0); }
         static Entry album(String title, String artist, ArrayList<Song> songs) { return new Entry(TYPE_ALBUM, title, artist, null, songs, 0); }
         static Entry artistAlbum(String title, String artist, ArrayList<Song> songs) { return new Entry(TYPE_ARTIST_ALBUM, title, artist, null, songs, 0); }
         static Entry playlist(String title, String subtitle, int id) { return new Entry(TYPE_PLAYLIST, title, subtitle, null, null, id); }
+        static Entry action(String title, String subtitle, int actionId) { return new Entry(TYPE_ACTION, title, subtitle, actionId); }
     }
 
     /** Album-cover renderer: FIT_CENTER sizing with a small rounded corner radius. */
