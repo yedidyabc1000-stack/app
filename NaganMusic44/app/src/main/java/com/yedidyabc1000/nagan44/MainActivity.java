@@ -32,6 +32,7 @@ import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -48,6 +49,8 @@ import android.widget.ProgressBar;
 import android.widget.EditText;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.widget.Toast;
 
 import java.io.File;
@@ -142,6 +145,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private TextView shuffleButton;
     private TextView repeatButton;
     private boolean userSeeking = false;
+    private int seekDirection = 0;
+    private final Runnable heldSeekRunnable = new Runnable() {
+        @Override public void run() {
+            if (seekDirection != 0) { seekBy(seekDirection * 4000); handler.postDelayed(this, 220L); }
+        }
+    };
     private ContentObserver mediaObserver;
     private final Runnable scanChangedMedia = new Runnable() {
         @Override public void run() {
@@ -332,21 +341,25 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         // Fetch artwork paths once per album instead of querying MediaStore once
         // for every track. This is substantially faster on older devices.
         HashMap<Long, String> artworkByAlbum = new HashMap<Long, String>();
+        HashMap<Long, String> albumArtistByAlbum = new HashMap<Long, String>();
         Cursor albumsCursor = null;
         try {
             albumsCursor = getContentResolver().query(
                     MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
-                    new String[]{MediaStore.Audio.Albums._ID, MediaStore.Audio.Albums.ALBUM_ART},
+                    new String[]{MediaStore.Audio.Albums._ID, MediaStore.Audio.Albums.ALBUM_ART, MediaStore.Audio.Albums.ALBUM_ARTIST},
                     null, null, null);
             if (albumsCursor != null) {
                 int albumIdCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums._ID);
                 int artCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums.ALBUM_ART);
-                if (albumIdCol >= 0 && artCol >= 0) {
+                int albumArtistCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums.ALBUM_ARTIST);
+                if (albumIdCol >= 0) {
                     while (albumsCursor.moveToNext()) {
                         long albumId = albumsCursor.getLong(albumIdCol);
                         String artPath = albumsCursor.getString(artCol);
-                        if (artPath != null && artPath.length() > 0) {
-                            artworkByAlbum.put(albumId, artPath);
+                        if (artPath != null && artPath.length() > 0) artworkByAlbum.put(albumId, artPath);
+                        if (albumArtistCol >= 0) {
+                            String albumArtist = albumsCursor.getString(albumArtistCol);
+                            if (albumArtist != null && albumArtist.trim().length() > 0 && !"<unknown>".equalsIgnoreCase(albumArtist.trim())) albumArtistByAlbum.put(albumId, albumArtist.trim());
                         }
                     }
                 }
@@ -390,6 +403,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         song.artist = artistCol >= 0 ? clean(cursor.getString(artistCol), "אמן לא ידוע") : "אמן לא ידוע";
                         song.album = albumCol >= 0 ? clean(cursor.getString(albumCol), "אלבום לא ידוע") : "אלבום לא ידוע";
                         song.albumId = albumIdCol >= 0 ? cursor.getLong(albumIdCol) : -1;
+                        song.albumArtist = albumArtistByAlbum.get(song.albumId);
                         song.duration = durationCol >= 0 ? cursor.getLong(durationCol) : 0;
                         song.path = pathCol >= 0 ? cursor.getString(pathCol) : null;
                         if (!isVisibleAudioPath(song.path)) continue;
@@ -532,15 +546,34 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         // item count is never changed behind its back during screen navigation.
         populateBrowser();
         adapter = new BrowserAdapter(new ArrayList<Entry>(visibleEntries));
+        if (detailLevel == 0 && activeTab == TAB_SONGS) {
+            final EditText search = new EditText(this);
+            search.setSingleLine(true);
+            search.setTextSize(16);
+            search.setHint("חיפוש שירים");
+            search.setTextColor(COLOR_TEXT);
+            search.setHintTextColor(COLOR_SUB);
+            search.setPadding(dp(12), 0, dp(12), 0);
+            search.setBackgroundDrawable(roundRect(0xffffffff, 7));
+            listView.addHeaderView(search, null, false);
+            search.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+                @Override public void onTextChanged(CharSequence value, int start, int before, int count) {
+                    if (adapter != null) { selectedPosition = 0; adapter.filter(value.toString()); }
+                }
+                @Override public void afterTextChanged(Editable value) { }
+            });
+        }
         listView.setAdapter(adapter);
         root.addView(listView, new LinearLayout.LayoutParams(-1, 0, 1));
         listView.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (position < 0 || position >= visibleEntries.size()) return;
+                int dataPosition = position - listView.getHeaderViewsCount();
+                if (dataPosition < 0 || adapter == null || dataPosition >= adapter.getCount()) return;
                 int previous = selectedPosition;
-                selectedPosition = position;
+                selectedPosition = dataPosition;
                 if (previous >= 0) {
-                    int oldChild = previous - listView.getFirstVisiblePosition();
+                    int oldChild = previous + listView.getHeaderViewsCount() - listView.getFirstVisiblePosition();
                     if (oldChild >= 0 && oldChild < listView.getChildCount()) {
                         listView.getChildAt(oldChild).setSelected(false);
                     }
@@ -551,16 +584,19 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         });
         listView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-                selectedPosition = position;
+                int dataPosition = position - listView.getHeaderViewsCount();
+                if (dataPosition < 0) return;
+                selectedPosition = dataPosition;
                 if (view != null) view.setSelected(true);
                 if (adapter != null) adapter.notifyDataSetChanged();
-                handleEntryClick(position);
+                handleEntryClick(dataPosition);
             }
         });
         listView.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
             @Override public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
-                if (adapter == null || position < 0 || position >= adapter.getCount()) return false;
-                Object selected = adapter.getItem(position);
+                int dataPosition = position - listView.getHeaderViewsCount();
+                if (adapter == null || dataPosition < 0 || dataPosition >= adapter.getCount()) return false;
+                Object selected = adapter.getItem(dataPosition);
                 if (!(selected instanceof Entry)) return false;
                 Entry entry = (Entry) selected;
                 if (entry.type != Entry.TYPE_SONG || entry.song == null) return false;
@@ -573,7 +609,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         setContentView(root);
         updateTabs();
         listView.requestFocus();
-        if (selectedPosition >= 0 && selectedPosition < visibleEntries.size()) listView.setSelection(selectedPosition);
+        if (selectedPosition >= 0 && selectedPosition < (adapter == null ? 0 : adapter.getCount())) listView.setSelection(selectedPosition + listView.getHeaderViewsCount());
     }
 
     private void addTab(String label, final int tab) {
@@ -673,9 +709,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void onEntrySelected(int position) {
-        if (position < 0 || position >= visibleEntries.size()) return;
+        ArrayList<Entry> selectionEntries = adapter == null ? visibleEntries : adapter.entries;
+        if (position < 0 || position >= selectionEntries.size()) return;
         selectedPosition = position;
-        Entry entry = visibleEntries.get(position);
+        Entry entry = selectionEntries.get(position);
         if (entry == null) return;
 
         if (entry.type == Entry.TYPE_ACTION) {
@@ -684,7 +721,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         } else if (entry.type == Entry.TYPE_SONG) {
             if (entry.song == null) return;
             ArrayList<Song> playQueue = new ArrayList<Song>();
-            for (Entry e : visibleEntries) {
+            for (Entry e : selectionEntries) {
                 if (e != null && e.type == Entry.TYPE_SONG && e.song != null) playQueue.add(e.song);
             }
             int index = playQueue.indexOf(entry.song);
@@ -918,9 +955,20 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private String artistLabel(List<Song> songs) {
-        if (songs.size() == 0) return "";
-        String artist = songs.get(0).artist;
-        return artist;
+        if (songs == null || songs.size() == 0) return "";
+        String albumArtist = songs.get(0).albumArtist;
+        if (albumArtist != null && albumArtist.trim().length() > 0) return albumArtist;
+        ArrayList<String> common = new ArrayList<String>();
+        for (String name : splitArtists(songs.get(0).artist)) if (name.length() > 0 && !common.contains(name)) common.add(name);
+        for (int i = 1; i < songs.size() && common.size() > 0; i++) {
+            String[] credits = splitArtists(songs.get(i).artist);
+            for (int j = common.size() - 1; j >= 0; j--) {
+                boolean found = false;
+                for (String credit : credits) if (common.get(j).equalsIgnoreCase(credit)) { found = true; break; }
+                if (!found) common.remove(j);
+            }
+        }
+        return common.size() == 0 ? "אמן לא ידוע" : common.get(0);
     }
 
     private ArrayList<Song> getArtistSongs(String name) {
@@ -959,67 +1007,173 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private void renderNowPlaying() {
         if (activeTab != TAB_NOW_PLAYING) lastContentTab = activeTab;
-        activeTab = TAB_NOW_PLAYING; showingNowPlaying = true;
-        nowPlayingRoot = new LinearLayout(this); nowPlayingRoot.setOrientation(LinearLayout.VERTICAL); nowPlayingRoot.setBackgroundColor(COLOR_BG);
-        LinearLayout bar = new LinearLayout(this); bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL); bar.setPadding(dp(8), 0, dp(8), 0); bar.setBackgroundColor(COLOR_DARK);
-        TextView back = text("‹", 25, 0xffffffff, true); back.setGravity(Gravity.CENTER);
-        back.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { activeTab = lastContentTab; showingNowPlaying = false; renderBrowser(); } });
-        bar.addView(back, new LinearLayout.LayoutParams(dp(36), -1));
-        TextView title = text("מתנגן כעת", 18, 0xffffffff, true); title.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        bar.addView(title, new LinearLayout.LayoutParams(0, -1, 1)); nowPlayingRoot.addView(bar, new LinearLayout.LayoutParams(-1, dp(36)));
+        activeTab = TAB_NOW_PLAYING;
+        showingNowPlaying = true;
+        nowPlayingRoot = new LinearLayout(this);
+        nowPlayingRoot.setOrientation(LinearLayout.VERTICAL);
+        nowPlayingRoot.setBackgroundColor(COLOR_BG);
 
-        tabsScroll = new HorizontalScrollView(this); tabsScroll.setHorizontalScrollBarEnabled(false); tabsScroll.setBackgroundColor(0xffdddddd);
-        tabsRow = new LinearLayout(this); tabsRow.setOrientation(LinearLayout.HORIZONTAL);
-        addTab("שירים", TAB_SONGS); addTab("אמנים", TAB_ARTISTS); addTab("אלבומים", TAB_ALBUMS); addTab("פלייליסטים", TAB_PLAYLISTS); addTab("מתנגן עכשיו", TAB_NOW_PLAYING);
-        tabsScroll.addView(tabsRow); nowPlayingRoot.addView(tabsScroll, new LinearLayout.LayoutParams(-1, dp(34))); updateTabs();
+        tabsScroll = new HorizontalScrollView(this);
+        tabsScroll.setHorizontalScrollBarEnabled(false);
+        tabsScroll.setBackgroundColor(0xffdddddd);
+        tabsRow = new LinearLayout(this);
+        tabsRow.setOrientation(LinearLayout.HORIZONTAL);
+        addTab("שירים", TAB_SONGS);
+        addTab("אמנים", TAB_ARTISTS);
+        addTab("אלבומים", TAB_ALBUMS);
+        addTab("פלייליסטים", TAB_PLAYLISTS);
+        addTab("מתנגן עכשיו", TAB_NOW_PLAYING);
+        tabsScroll.addView(tabsRow);
+        nowPlayingRoot.addView(tabsScroll, new LinearLayout.LayoutParams(-1, dp(34)));
+        updateTabs();
 
-        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(false);
-        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL); content.setPadding(dp(16), dp(12), dp(16), dp(12));
-        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
-        float density = getResources().getDisplayMetrics().density;
-        int screenWidth = (int)(getResources().getDisplayMetrics().widthPixels / density);
-        int screenHeight = (int)(getResources().getDisplayMetrics().heightPixels / density);
-        int artSize = dp(Math.min(280, Math.min(screenWidth - 40, Math.max(180, screenHeight * 0.52f))));
-        nowArt = new RoundArtView(this); Bitmap art = currentSong == null ? null : loadArtwork(currentSong);
-        nowArt.setBitmap(art == null ? BitmapFactory.decodeResource(getResources(), R.drawable.albumart_mp_unknown_new) : art);
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(artSize, artSize); artParams.gravity = Gravity.CENTER_HORIZONTAL; artParams.bottomMargin = dp(14); content.addView(nowArt, artParams);
-        nowTitle = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 19, COLOR_TEXT, true); nowTitle.setGravity(Gravity.CENTER); nowTitle.setMaxLines(2); content.addView(nowTitle, new LinearLayout.LayoutParams(-1, -2));
-        nowArtist = text(currentSong == null ? "" : currentSong.artist, 15, COLOR_SUB, false); nowArtist.setGravity(Gravity.CENTER); content.addView(nowArtist, new LinearLayout.LayoutParams(-1, -2));
-        nowAlbum = text(currentSong == null ? "" : currentSong.album, 13, COLOR_SUB, false); nowAlbum.setGravity(Gravity.CENTER); content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, -2));
+        // Fixed, non-scrolling layout. Artwork receives only the height left
+        // after the song details, timeline and transport controls are placed.
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setGravity(Gravity.CENTER_HORIZONTAL);
+        content.setPadding(dp(12), dp(4), dp(12), dp(2));
 
-        LinearLayout timeline = new LinearLayout(this); timeline.setOrientation(LinearLayout.VERTICAL); timeline.setPadding(dp(4), dp(12), dp(4), dp(4));
-        seekBar = new SeekBar(this); seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration)); seekBar.setProgress(player != null ? safePosition() : 0);
-        android.graphics.drawable.GradientDrawable bg = roundRect(0xffd4d9de, 4); bg.setSize(-1, dp(4));
-        android.graphics.drawable.GradientDrawable fill = roundRect(COLOR_ACCENT, 4); fill.setSize(-1, dp(4));
-        android.graphics.drawable.ClipDrawable clipped = new android.graphics.drawable.ClipDrawable(fill, Gravity.LEFT, android.graphics.drawable.ClipDrawable.HORIZONTAL);
-        android.graphics.drawable.LayerDrawable layers = new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{bg, clipped});
-        layers.setId(0, android.R.id.background); layers.setId(1, android.R.id.progress); seekBar.setProgressDrawable(layers);
-        android.graphics.drawable.GradientDrawable thumb = roundRect(0xff202020, 9); thumb.setSize(dp(15), dp(15)); seekBar.setThumb(thumb); seekBar.setPadding(dp(2), 0, dp(2), 0);
+        FrameLayout artHolder = new FrameLayout(this);
+        nowArt = new RoundArtView(this);
+        Bitmap art = currentSong == null ? null : loadArtwork(currentSong);
+        nowArt.setBitmap(art == null
+                ? BitmapFactory.decodeResource(getResources(), R.drawable.albumart_mp_unknown_new) : art);
+        artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 1f);
+        artParams.bottomMargin = dp(4);
+        content.addView(artHolder, artParams);
+
+        nowTitle = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 17, COLOR_TEXT, true);
+        nowTitle.setGravity(Gravity.CENTER);
+        nowTitle.setSingleLine(true);
+        content.addView(nowTitle, new LinearLayout.LayoutParams(-1, dp(22)));
+        nowArtist = text(currentSong == null ? "" : currentSong.artist, 13, COLOR_SUB, false);
+        nowArtist.setGravity(Gravity.CENTER);
+        content.addView(nowArtist, new LinearLayout.LayoutParams(-1, dp(18)));
+        nowAlbum = text(currentSong == null ? "" : currentSong.album, 12, COLOR_SUB, false);
+        nowAlbum.setGravity(Gravity.CENTER);
+        content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, dp(17)));
+
+        LinearLayout timeline = new LinearLayout(this);
+        timeline.setOrientation(LinearLayout.VERTICAL);
+        timeline.setPadding(dp(3), 0, dp(3), 0);
+        seekBar = new SeekBar(this);
+        seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration));
+        seekBar.setProgress(player != null ? safePosition() : 0);
+
+        android.graphics.drawable.GradientDrawable bg = roundRect(0xffd4d9de, 2);
+        bg.setSize(-1, dp(2));
+        android.graphics.drawable.GradientDrawable fill = roundRect(COLOR_ACCENT, 2);
+        fill.setSize(-1, dp(2));
+        android.graphics.drawable.ClipDrawable clipped = new android.graphics.drawable.ClipDrawable(
+                fill, Gravity.LEFT, android.graphics.drawable.ClipDrawable.HORIZONTAL);
+        android.graphics.drawable.LayerDrawable layers =
+                new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{bg, clipped});
+        layers.setId(0, android.R.id.background);
+        layers.setId(1, android.R.id.progress);
+        seekBar.setProgressDrawable(layers);
+        android.graphics.drawable.GradientDrawable thumb = roundRect(0xff202020, 5);
+        thumb.setSize(dp(9), dp(9));
+        seekBar.setThumb(thumb);
+        seekBar.setPadding(dp(3), 0, dp(3), 0);
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) { }
             @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; }
-            @Override public void onStopTrackingTouch(SeekBar bar) { userSeeking = false; if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { } }
+            @Override public void onStopTrackingTouch(SeekBar bar) {
+                userSeeking = false;
+                if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { }
+            }
         });
-        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(34)));
-        LinearLayout times = new LinearLayout(this); times.setOrientation(LinearLayout.HORIZONTAL); times.setGravity(Gravity.CENTER_VERTICAL);
-        elapsedText = text(formatTime(player == null ? 0 : safePosition()), 12, COLOR_SUB, false); durationText = text(formatTime(currentSong == null ? 0 : currentSong.duration), 12, COLOR_SUB, false);
-        times.addView(elapsedText, new LinearLayout.LayoutParams(0, -2, 1)); durationText.setGravity(Gravity.RIGHT); times.addView(durationText, new LinearLayout.LayoutParams(0, -2, 1));
-        timeline.addView(times, new LinearLayout.LayoutParams(-1, -2)); content.addView(timeline, new LinearLayout.LayoutParams(-1, -2));
+        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(25)));
+        LinearLayout times = new LinearLayout(this);
+        times.setOrientation(LinearLayout.HORIZONTAL);
+        times.setGravity(Gravity.CENTER_VERTICAL);
+        elapsedText = text(formatTime(player == null ? 0 : safePosition()), 11, COLOR_SUB, false);
+        durationText = text(formatTime(currentSong == null ? 0 : currentSong.duration), 11, COLOR_SUB, false);
+        times.addView(elapsedText, new LinearLayout.LayoutParams(0, -2, 1));
+        durationText.setGravity(Gravity.RIGHT);
+        times.addView(durationText, new LinearLayout.LayoutParams(0, -2, 1));
+        timeline.addView(times, new LinearLayout.LayoutParams(-1, dp(15)));
+        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(40));
+        timelineParams.topMargin = dp(2);
+        content.addView(timeline, timelineParams);
 
-        LinearLayout controls = new LinearLayout(this); controls.setGravity(Gravity.CENTER); controls.setOrientation(LinearLayout.HORIZONTAL); controls.setPadding(0, dp(10), 0, dp(4));
-        TextView shuffleControl = controlText("⇄", shuffle ? COLOR_ACCENT : COLOR_SUB); shuffleButton = shuffleControl;
-        shuffleControl.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { shuffle = !shuffle; updatePlayerButtons(); } });
-        controls.addView(shuffleControl, new LinearLayout.LayoutParams(0, dp(48), 1));
-        ImageButton previous = controlImage(R.drawable.play_previous_normal); previous.setBackgroundDrawable(roundRect(0xffe5e9ec, 26));
-        previous.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { playPrevious(); } }); controls.addView(previous, new LinearLayout.LayoutParams(0, dp(48), 1));
-        nowPlayButton = controlImage(isPlaying() ? R.drawable.ic_media_pause_new : R.drawable.ic_media_play_new); nowPlayButton.setBackgroundDrawable(roundRect(COLOR_ACCENT, 30)); nowPlayButton.setPadding(dp(10), dp(10), dp(10), dp(10));
-        nowPlayButton.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { togglePlayback(); } }); controls.addView(nowPlayButton, new LinearLayout.LayoutParams(0, dp(54), 1));
-        ImageButton next = controlImage(R.drawable.play_next_normal); next.setBackgroundDrawable(roundRect(0xffe5e9ec, 26));
-        next.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { playNext(true); } }); controls.addView(next, new LinearLayout.LayoutParams(0, dp(48), 1));
-        TextView repeatControl = controlText(repeatMode == 2 ? "1↻" : "↻", repeatMode == 0 ? COLOR_SUB : COLOR_ACCENT); repeatButton = repeatControl;
-        repeatControl.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { repeatMode = (repeatMode + 1) % 3; updatePlayerButtons(); } }); controls.addView(repeatControl, new LinearLayout.LayoutParams(0, dp(48), 1));
-        content.addView(controls, new LinearLayout.LayoutParams(-1, dp(62)));
-        nowPlayingRoot.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(nowPlayingRoot); updatePlayerButtons();
+        LinearLayout controls = new LinearLayout(this);
+        controls.setGravity(Gravity.CENTER);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
+        controls.setPadding(0, dp(3), 0, dp(2));
+        TransportButton previous = new TransportButton(this, false);
+        previous.setContentDescription("השיר הקודם; לחיצה ארוכה: הרצה אחורה");
+        previous.setBackgroundDrawable(roundRect(0xffe7ecef, 24));
+        previous.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { playPrevious(); }
+        });
+        installHoldSeek(previous, -1);
+        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(52), dp(44));
+        sideParams.rightMargin = dp(22);
+        controls.addView(previous, sideParams);
+
+        nowPlayButton = controlImage(isPlaying()
+                ? R.drawable.ic_media_pause_new : R.drawable.ic_media_play_new);
+        nowPlayButton.setBackgroundDrawable(roundRect(COLOR_ACCENT, 25));
+        nowPlayButton.setPadding(dp(9), dp(9), dp(9), dp(9));
+        nowPlayButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { togglePlayback(); }
+        });
+        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(50), dp(50)));
+
+        TransportButton next = new TransportButton(this, true);
+        next.setContentDescription("השיר הבא; לחיצה ארוכה: הרצה קדימה");
+        next.setBackgroundDrawable(roundRect(0xffe7ecef, 24));
+        next.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { playNext(true); }
+        });
+        installHoldSeek(next, 1);
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(52), dp(44));
+        nextParams.leftMargin = dp(22);
+        controls.addView(next, nextParams);
+        content.addView(controls, new LinearLayout.LayoutParams(-1, dp(54)));
+
+        nowPlayingRoot.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
+        setContentView(nowPlayingRoot);
+        updatePlayerButtons();
+    }
+
+    private void installHoldSeek(View control, final int direction) {
+        control.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override public boolean onLongClick(View v) {
+                seekDirection = direction;
+                handler.removeCallbacks(heldSeekRunnable);
+                seekBy(direction * 4000);
+                handler.postDelayed(heldSeekRunnable, 220L);
+                return true;
+            }
+        });
+        control.setOnTouchListener(new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, MotionEvent event) {
+                int action = event.getAction();
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    if (seekDirection == direction) {
+                        seekDirection = 0;
+                        handler.removeCallbacks(heldSeekRunnable);
+                    }
+                }
+                return false;
+            }
+        });
+    }
+
+    private void seekBy(int deltaMs) {
+        if (player == null) return;
+        try {
+            int duration = player.getDuration();
+            int current = player.getCurrentPosition();
+            int target = Math.max(0, Math.min(duration, current + deltaMs));
+            player.seekTo(target);
+            if (seekBar != null) seekBar.setProgress(target);
+            if (elapsedText != null) elapsedText.setText(formatTime(target));
+        } catch (IllegalStateException ignored) { }
     }
 
     private TextView controlText(String label, int color) {
@@ -1317,10 +1471,24 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     };
 
     private class BrowserAdapter extends BaseAdapter {
-        private final ArrayList<Entry> entries;
+        private final ArrayList<Entry> allEntries = new ArrayList<Entry>();
+        private final ArrayList<Entry> entries = new ArrayList<Entry>();
 
         BrowserAdapter(ArrayList<Entry> snapshot) {
-            entries = snapshot == null ? new ArrayList<Entry>() : snapshot;
+            if (snapshot != null) allEntries.addAll(snapshot);
+            entries.addAll(allEntries);
+        }
+
+        void filter(String query) {
+            String value = query == null ? "" : query.trim().toLowerCase(Locale.getDefault());
+            entries.clear();
+            if (value.length() == 0) entries.addAll(allEntries);
+            else for (Entry entry : allEntries) {
+                String title = entry.title == null ? "" : entry.title.toLowerCase(Locale.getDefault());
+                String subtitle = entry.subtitle == null ? "" : entry.subtitle.toLowerCase(Locale.getDefault());
+                if (title.contains(value) || subtitle.contains(value)) entries.add(entry);
+            }
+            notifyDataSetChanged();
         }
 
         @Override public int getCount() { return entries.size(); }
@@ -1374,6 +1542,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         String album;
         String path;
         String albumArtPath;
+        String albumArtist;
         Uri uri;
     }
 
@@ -1411,6 +1580,41 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         static Entry artistAlbum(String title, String artist, ArrayList<Song> songs) { return new Entry(TYPE_ARTIST_ALBUM, title, artist, null, songs, 0); }
         static Entry playlist(String title, String subtitle, int id) { return new Entry(TYPE_PLAYLIST, title, subtitle, null, null, id); }
         static Entry action(String title, String subtitle, int actionId) { return new Entry(TYPE_ACTION, title, subtitle, actionId); }
+    }
+
+    private static class TransportButton extends View {
+        private final boolean next;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        TransportButton(Activity context, boolean next) {
+            super(context);
+            this.next = next;
+            setFocusable(true);
+            setClickable(true);
+        }
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float unit = getResources().getDisplayMetrics().density;
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            paint.setColor(0xff27343b);
+            paint.setStyle(Paint.Style.FILL);
+            Path triangle = new Path();
+            if (next) {
+                triangle.moveTo(cx - 5f * unit, cy - 10f * unit);
+                triangle.lineTo(cx - 5f * unit, cy + 10f * unit);
+                triangle.lineTo(cx + 7f * unit, cy);
+                canvas.drawRoundRect(cx + 9f * unit, cy - 10f * unit,
+                        cx + 12f * unit, cy + 10f * unit, unit, unit, paint);
+            } else {
+                triangle.moveTo(cx + 5f * unit, cy - 10f * unit);
+                triangle.lineTo(cx + 5f * unit, cy + 10f * unit);
+                triangle.lineTo(cx - 7f * unit, cy);
+                canvas.drawRoundRect(cx - 12f * unit, cy - 10f * unit,
+                        cx - 9f * unit, cy + 10f * unit, unit, unit, paint);
+            }
+            triangle.close();
+            canvas.drawPath(triangle, paint);
+        }
     }
 
     /** Album-cover renderer: FIT_CENTER sizing with a small rounded corner radius. */
