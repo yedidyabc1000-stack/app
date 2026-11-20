@@ -239,7 +239,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     @Override protected void onPause() {
-        unregisterMediaObserver(); handler.removeCallbacks(scanChangedMedia); super.onPause();
+        unregisterMediaObserver(); handler.removeCallbacks(scanChangedMedia);
+        seekDirection = 0; handler.removeCallbacks(heldSeekRunnable); super.onPause();
     }
 
     private void registerMediaObserver() {
@@ -539,7 +540,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         listView.setSelector(createRowSelector());
         listView.setFocusable(true);
         listView.setFocusableInTouchMode(true);
-        listView.setItemsCanFocus(false);
+        listView.setItemsCanFocus(detailLevel == 0 && activeTab == TAB_SONGS);
         listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
         // Populate the shared browser model before creating the adapter.
         // Each adapter receives its own snapshot so the previous ListView's
@@ -549,6 +550,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (detailLevel == 0 && activeTab == TAB_SONGS) {
             final EditText search = new EditText(this);
             search.setSingleLine(true);
+            search.setFocusable(true);
+            search.setFocusableInTouchMode(true);
+            search.setMinHeight(dp(42));
             search.setTextSize(16);
             search.setHint("חיפוש שירים");
             search.setTextColor(COLOR_TEXT);
@@ -1439,6 +1443,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     @Override protected void onDestroy() {
         libraryLoadToken++;
+        seekDirection = 0; handler.removeCallbacks(heldSeekRunnable);
         unregisterMediaObserver(); handler.removeCallbacks(scanChangedMedia);
         handler.removeCallbacks(progressRunnable);
         releasePlayer();
