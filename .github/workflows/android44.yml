@@ -23,9 +23,6 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android platform
         run: |
           yes | sdkmanager --licenses
