@@ -489,12 +489,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void populateBrowser() {
-        visibleEntries.clear();
         if (detailLevel > 0) {
-            // Detail lists are assigned explicitly by showEntries().
-            adapter.notifyDataSetChanged();
+            // Keep the entries assigned by showEntries(); never clear a detail list
+            // while recreating its ListView.
+            if (adapter != null) adapter.notifyDataSetChanged();
             return;
         }
+        visibleEntries.clear();
         if (activeTab == TAB_SONGS) {
             for (Song s : allSongs) visibleEntries.add(Entry.song(s));
         } else if (activeTab == TAB_ARTISTS) {
@@ -524,10 +525,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         visibleEntries.addAll(entries);
         selectedPosition = 0;
         renderBrowser();
-        // renderBrowser does not repopulate detail lists.
-        visibleEntries.clear();
-        visibleEntries.addAll(entries);
-        if (adapter != null) adapter.notifyDataSetChanged();
     }
 
     private void showTrackList(String title, ArrayList<Song> songs) {
@@ -547,7 +544,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private void reportUiError(String action, RuntimeException error) {
         Log.e(TAG, action + " failed", error);
         String detail = error.getClass().getSimpleName();
-        Toast.makeText(this, "לא ניתן לבצע פעולה (" + detail + ")", Toast.LENGTH_LONG).show();
+        String message = error.getMessage();
+        if (message != null && message.length() > 0) detail += ": " + message;
+        Toast.makeText(this, "שגיאה בפתיחת הפריט (" + detail + ")", Toast.LENGTH_LONG).show();
     }
 
     private void onEntrySelected(int position) {
@@ -817,11 +816,32 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private Bitmap loadArtwork(Song song) {
-        if (song == null || song.albumArtPath == null) return null;
-        try {
-            File file = new File(song.albumArtPath);
-            if (file.exists()) return BitmapFactory.decodeFile(song.albumArtPath);
-        } catch (Exception ignored) { }
+        if (song == null) return null;
+        if (song.albumArtPath != null) {
+            try {
+                File file = new File(song.albumArtPath);
+                if (file.exists()) {
+                    Bitmap bitmap = BitmapFactory.decodeFile(song.albumArtPath);
+                    if (bitmap != null) return bitmap;
+                }
+            } catch (Exception ignored) { }
+        }
+
+        // Some Android 4.4 music libraries do not expose a readable ALBUM_ART path.
+        // The MediaStore album-art provider can still supply the image by album ID.
+        if (song.albumId >= 0) {
+            java.io.InputStream input = null;
+            try {
+                Uri artUri = Uri.parse("content://media/external/audio/albumart/" + song.albumId);
+                input = getContentResolver().openInputStream(artUri);
+                if (input != null) return BitmapFactory.decodeStream(input);
+            } catch (Exception ignored) {
+            } finally {
+                if (input != null) {
+                    try { input.close(); } catch (Exception ignored) { }
+                }
+            }
+        }
         return null;
     }
 
@@ -867,8 +887,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             Toast.makeText(this, "לא ניתן לנגן את הקובץ", Toast.LENGTH_SHORT).show();
             releasePlayer();
         }
+        showingNowPlaying = true;
+        renderNowPlaying();
         updatePlayerButtons();
-        if (showingNowPlaying) renderNowPlaying();
     }
 
     @Override public void onPrepared(MediaPlayer mp) {
@@ -878,7 +899,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             recordPlay(currentSong);
         } catch (IllegalStateException ignored) { }
         updatePlayerButtons();
-        if (showingNowPlaying) renderNowPlaying();
     }
 
     @Override public void onCompletion(MediaPlayer mp) {

@@ -65,12 +65,12 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.3
+          tag_name: v2.0.4
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.0.3
+          name: נגן Android 4.4 – v2.0.4
           body: |
             גרסה חדשה של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
-            כוללת תיקון לקריסות בניווט בין אמנים, אלבומים ופלייליסטים, סימון ברור של השורה המסומנת במקלדת/שלט, והמשך סריקת ספריית המוזיקה ברקע.
+            כוללת תיקון לניווט בין אמנים ואלבומים, שמירת רשימות פרטים בעת מעבר בין מסכים, פתיחת מסך 'מתנגן כעת' בבחירת שיר, וטעינת עטיפת אלבום דרך MediaStore.
           files: |
             releases/NaganMusic44-Android44.apk
             releases/NaganMusic44-source.zip
