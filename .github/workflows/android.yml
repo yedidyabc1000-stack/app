@@ -3,6 +3,8 @@ name: Build Android music player
 on:
   push:
     branches: [ main, android44-rebuild ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
