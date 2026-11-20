@@ -103,6 +103,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private MediaPlayer player;
     private Song currentSong;
     private int queueIndex = -1;
+    private long forcedNextSongId = -1L;
     private int activeTab = TAB_SONGS;
     private int lastContentTab = TAB_SONGS;
     private int repeatMode = 0; // 0=off, 1=all, 2=one
@@ -437,6 +438,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (updated != null) { if (i == queueIndex) newIndex = updatedQueue.size(); updatedQueue.add(updated); }
         }
         queue.clear(); queue.addAll(updatedQueue); queueIndex = currentSong == null ? -1 : newIndex;
+        if (forcedNextSongId >= 0 && !byId.containsKey(forcedNextSongId)) forcedNextSongId = -1L;
         for (UserPlaylist playlist : customPlaylists) {
             for (int j = playlist.songIds.size() - 1; j >= 0; j--) if (!byId.containsKey(playlist.songIds.get(j))) playlist.songIds.remove(j);
         }
@@ -750,6 +752,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
         int insertAt = Math.min(queue.size(), queueIndex + 1);
         queue.add(insertAt, song);
+        forcedNextSongId = song.id;
         Toast.makeText(this, "השיר נוסף אחרי השיר הנוכחי", Toast.LENGTH_SHORT).show();
     }
 
@@ -1085,6 +1088,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private void startTrack(ArrayList<Song> songs, int index) {
         if (songs == null || songs.size() == 0 || index < 0 || index >= songs.size()) return;
+        forcedNextSongId = -1L;
         queue.clear();
         queue.addAll(songs);
         queueIndex = index;
@@ -1138,11 +1142,17 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private void playNext(boolean manual) {
         if (queue.size() == 0) return;
-        int next;
-        if (shuffle && queue.size() > 1) {
+        int next = -1;
+        if (forcedNextSongId >= 0) {
+            for (int i = Math.max(0, queueIndex + 1); i < queue.size(); i++) {
+                if (queue.get(i).id == forcedNextSongId) { next = i; break; }
+            }
+            forcedNextSongId = -1L;
+        }
+        if (next < 0 && shuffle && queue.size() > 1) {
             next = queueIndex;
             while (next == queueIndex) next = random.nextInt(queue.size());
-        } else {
+        } else if (next < 0) {
             next = queueIndex + 1;
         }
         if (next >= queue.size()) {
