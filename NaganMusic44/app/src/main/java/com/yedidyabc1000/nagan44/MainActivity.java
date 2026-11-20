@@ -1207,7 +1207,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowPlayingRoot.setOrientation(LinearLayout.VERTICAL);
         nowPlayingRoot.setBackgroundColor(COLOR_BG);
 
-remove now-playing top tabs        // Fixed, non-scrolling layout. Artwork receives only the height left
+        // Fixed layout. Artwork leaves enough room for the timeline and controls.
         // after the song details, timeline and transport controls are placed.
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
