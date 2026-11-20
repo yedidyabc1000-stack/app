@@ -36,6 +36,7 @@ import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.SeekBar;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -146,8 +147,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         handler.post(progressRunnable);
         if (hasStoragePermission()) {
-            loadLibrary();
-            renderBrowser();
+            loadLibraryAsync();
         } else {
             renderPermissionScreen();
         }
@@ -191,8 +191,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode == REQUEST_STORAGE) {
             if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-                loadLibrary();
-                renderBrowser();
+                loadLibraryAsync();
             } else {
                 Toast.makeText(this, "נדרשת הרשאת אחסון כדי לסרוק שירים", Toast.LENGTH_LONG).show();
                 renderPermissionScreen();
@@ -200,10 +199,91 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
     }
 
-    private void loadLibrary() {
+    /**
+     * Scan MediaStore away from the UI thread. Older Android devices can take
+     * several seconds to answer MediaStore queries, especially on large SD cards.
+     * Keeping this work off the main thread prevents the blank-screen/ANR issue.
+     */
+    private int libraryLoadToken = 0;
+
+    private void loadLibraryAsync() {
+        final int token = ++libraryLoadToken;
         loading = true;
-        allSongs.clear();
+        renderLoadingScreen();
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                final ArrayList<Song> loadedSongs = scanLibrary();
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing() || token != libraryLoadToken) return;
+                        allSongs.clear();
+                        allSongs.addAll(loadedSongs);
+                        loading = false;
+                        renderBrowser();
+                        if (loadedSongs.size() == 0) {
+                            Toast.makeText(MainActivity.this,
+                                    "לא נמצאו שירים במכשיר", Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+            }
+        }, "nagan-library-scan");
+        worker.setPriority(Thread.NORM_PRIORITY - 1);
+        worker.start();
+    }
+
+    private void renderLoadingScreen() {
+        root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(dp(18), dp(18), dp(18), dp(18));
+        root.setBackgroundColor(COLOR_BG);
+        TextView title = text("נגן מוזיקה", 21, COLOR_TEXT, true);
+        title.setGravity(Gravity.CENTER);
+        TextView message = text("סורק את ספריית המוזיקה...", 15, COLOR_SUB, false);
+        message.setGravity(Gravity.CENTER);
+        ProgressBar progress = new ProgressBar(this);
+        progress.setIndeterminate(true);
+        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(-2, -2);
+        progressParams.topMargin = dp(20);
+        progressParams.bottomMargin = dp(12);
+        root.addView(progress, progressParams);
+        root.addView(message, new LinearLayout.LayoutParams(-1, -2));
+        setContentView(root);
+    }
+
+    private ArrayList<Song> scanLibrary() {
+        ArrayList<Song> songs = new ArrayList<Song>();
         Cursor cursor = null;
+        // Fetch artwork paths once per album instead of querying MediaStore once
+        // for every track. This is substantially faster on older devices.
+        HashMap<Long, String> artworkByAlbum = new HashMap<Long, String>();
+        Cursor albumsCursor = null;
+        try {
+            albumsCursor = getContentResolver().query(
+                    MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
+                    new String[]{MediaStore.Audio.Albums._ID, MediaStore.Audio.Albums.ALBUM_ART},
+                    null, null, null);
+            if (albumsCursor != null) {
+                int albumIdCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums._ID);
+                int artCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums.ALBUM_ART);
+                if (albumIdCol >= 0 && artCol >= 0) {
+                    while (albumsCursor.moveToNext()) {
+                        long albumId = albumsCursor.getLong(albumIdCol);
+                        String artPath = albumsCursor.getString(artCol);
+                        if (artPath != null && artPath.length() > 0) {
+                            artworkByAlbum.put(albumId, artPath);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // Album artwork is optional; continue loading the music library.
+        } finally {
+            if (albumsCursor != null) albumsCursor.close();
+        }
+
         String[] projection = new String[]{
                 MediaStore.Audio.Media._ID,
                 MediaStore.Audio.Media.TITLE,
@@ -228,41 +308,30 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 int durationCol = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION);
                 int pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA);
                 int dateCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED);
-                while (cursor.moveToNext()) {
-                    long id = cursor.getLong(idCol);
-                    Song song = new Song();
-                    song.id = id;
-                    song.title = clean(cursor.getString(titleCol), "ללא שם");
-                    song.artist = clean(cursor.getString(artistCol), "אמן לא ידוע");
-                    song.album = clean(cursor.getString(albumCol), "אלבום לא ידוע");
-                    song.albumId = albumIdCol >= 0 ? cursor.getLong(albumIdCol) : -1;
-                    song.duration = durationCol >= 0 ? cursor.getLong(durationCol) : 0;
-                    song.path = pathCol >= 0 ? cursor.getString(pathCol) : null;
-                    song.dateAdded = dateCol >= 0 ? cursor.getLong(dateCol) : 0;
-                    song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
-                    song.albumArtPath = lookupAlbumArt(song.albumId);
-                    allSongs.add(song);
+                if (idCol >= 0) {
+                    while (cursor.moveToNext()) {
+                        long id = cursor.getLong(idCol);
+                        Song song = new Song();
+                        song.id = id;
+                        song.title = titleCol >= 0 ? clean(cursor.getString(titleCol), "ללא שם") : "ללא שם";
+                        song.artist = artistCol >= 0 ? clean(cursor.getString(artistCol), "אמן לא ידוע") : "אמן לא ידוע";
+                        song.album = albumCol >= 0 ? clean(cursor.getString(albumCol), "אלבום לא ידוע") : "אלבום לא ידוע";
+                        song.albumId = albumIdCol >= 0 ? cursor.getLong(albumIdCol) : -1;
+                        song.duration = durationCol >= 0 ? cursor.getLong(durationCol) : 0;
+                        song.path = pathCol >= 0 ? cursor.getString(pathCol) : null;
+                        song.dateAdded = dateCol >= 0 ? cursor.getLong(dateCol) : 0;
+                        song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
+                        song.albumArtPath = artworkByAlbum.get(song.albumId);
+                        songs.add(song);
+                    }
                 }
             }
-        } catch (Exception error) {
-            Toast.makeText(this, "לא ניתן לסרוק את ספריית המוזיקה", Toast.LENGTH_LONG).show();
+        } catch (Exception ignored) {
+            // Return any songs found so far; the UI thread remains responsive.
         } finally {
             if (cursor != null) cursor.close();
-            loading = false;
         }
-    }
-
-    private String lookupAlbumArt(long albumId) {
-        if (albumId < 0) return null;
-        Cursor c = null;
-        try {
-            c = getContentResolver().query(MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
-                    new String[]{MediaStore.Audio.Albums.ALBUM_ART},
-                    MediaStore.Audio.Albums._ID + "=?", new String[]{String.valueOf(albumId)}, null);
-            if (c != null && c.moveToFirst()) return c.getString(0);
-        } catch (Exception ignored) { }
-        finally { if (c != null) c.close(); }
-        return null;
+        return songs;
     }
 
     private String clean(String value, String fallback) {
@@ -295,7 +364,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         TextView refresh = text("⟳", 22, 0xffffffff, true);
         refresh.setGravity(Gravity.CENTER);
         refresh.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { loadLibrary(); renderBrowser(); }
+            @Override public void onClick(View v) { loadLibraryAsync(); }
         });
         toolbar.addView(refresh, new LinearLayout.LayoutParams(dp(36), -1));
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(36)));
@@ -872,6 +941,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     @Override protected void onDestroy() {
+        libraryLoadToken++;
         handler.removeCallbacks(progressRunnable);
         releasePlayer();
         super.onDestroy();
