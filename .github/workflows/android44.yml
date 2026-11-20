@@ -3,8 +3,10 @@ on:
   push:
     branches:
       - android44-rebuild
+
 permissions:
   contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -32,29 +34,16 @@ jobs:
         run: |
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Reassemble source archive
+      - name: Prepare source archive
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p payload
-          cat \
-            .build/parts/part{00..15}.b64 \
-            .build/repack2/16-00.b64 .build/repack2/16-01.b64 .build/repack2/16-02.b64 .build/repack2/16-03.b64 .build/repack2/16-04.b64 .build/repack2/16-05.b64 \
-            .build/repack3/17-00a.b64 .build/repack3/17-00b.b64 \
-            .build/repack2/17-01.b64 .build/repack2/17-02.b64 .build/repack2/17-03.b64 \
-            .build/repack3/17-04a.b64 .build/repack3/17-04b.b64 \
-            .build/repack2/17-05.b64 \
-            .build/repack3/18-00a.b64 .build/repack3/18-00b.b64 \
-            .build/repack2/18-01.b64 .build/repack2/18-02.b64 .build/repack2/18-03.b64 \
-            .build/repack3/18-04a.b64 .build/repack3/18-04b.b64 \
-            .build/repack2/18-05.b64 \
-            .build/parts/part19.b64 | base64 --decode > payload/NaganMusic44.zip
-          unzip -t payload/NaganMusic44.zip
-          unzip -q payload/NaganMusic44.zip -d payload/source
+          rm -f /tmp/NaganMusic44-source.zip
+          zip -qr /tmp/NaganMusic44-source.zip NaganMusic44 -x 'NaganMusic44/**/build/*' 'NaganMusic44/**/.gradle/*'
 
       - name: Build APK
         run: |
-          cd payload/source/NaganMusic44
+          cd NaganMusic44
           gradle --no-daemon --stacktrace assembleDebug
 
       - name: Publish source and APK to repository
@@ -63,17 +52,15 @@ jobs:
           set -euo pipefail
           git pull --rebase origin "${GITHUB_REF_NAME}"
           mkdir -p releases
-          cp payload/source/NaganMusic44/app/build/outputs/apk/debug/app-debug.apk releases/NaganMusic44-Android44.apk
-          cp payload/NaganMusic44.zip releases/NaganMusic44-source.zip
-          cp -a payload/source/NaganMusic44 ./NaganMusic44
-          rm -rf NaganMusic44/app/build
-          rm -rf .build
-          rm -f ANDROID44_BUILD_TRIGGER.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Publish Android 4.4 source and APK [skip ci]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          cp NaganMusic44/app/build/outputs/apk/debug/app-debug.apk releases/NaganMusic44-Android44.apk
+          cp /tmp/NaganMusic44-source.zip releases/NaganMusic44-source.zip
+          git add releases/NaganMusic44-Android44.apk releases/NaganMusic44-source.zip
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Publish Android 4.4 source and APK [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -96,6 +83,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nagan-android44-debug-apk
-          path: payload/source/NaganMusic44/app/build/outputs/apk/debug/app-debug.apk
+          path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
