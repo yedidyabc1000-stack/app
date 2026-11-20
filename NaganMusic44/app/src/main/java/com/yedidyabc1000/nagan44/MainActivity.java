@@ -346,7 +346,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         try {
             albumsCursor = getContentResolver().query(
                     MediaStore.Audio.Albums.EXTERNAL_CONTENT_URI,
-                    new String[]{MediaStore.Audio.Albums._ID, MediaStore.Audio.Albums.ALBUM_ART, MediaStore.Audio.Albums.ALBUM_ARTIST},
+                    new String[]{MediaStore.Audio.Albums._ID, MediaStore.Audio.Albums.ALBUM_ART, MediaStore.Audio.Albums.ARTIST},
                     null, null, null);
             if (albumsCursor != null) {
                 int albumIdCol = albumsCursor.getColumnIndex(MediaStore.Audio.Albums._ID);
@@ -957,7 +957,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private String artistLabel(List<Song> songs) {
         if (songs == null || songs.size() == 0) return "";
         String albumArtist = songs.get(0).albumArtist;
-        if (albumArtist != null && albumArtist.trim().length() > 0) return albumArtist;
+        if (albumArtist != null && albumArtist.trim().length() > 0) {
+            String[] albumCredits = splitArtists(albumArtist);
+            if (albumCredits.length > 0) return albumCredits[0];
+        }
         ArrayList<String> common = new ArrayList<String>();
         for (String name : splitArtists(songs.get(0).artist)) if (name.length() > 0 && !common.contains(name)) common.add(name);
         for (int i = 1; i < songs.size() && common.size() > 0; i++) {
