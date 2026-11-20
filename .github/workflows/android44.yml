@@ -75,6 +75,23 @@ jobs:
           git commit -m "Publish Android 4.4 source and APK [skip ci]"
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.0.0
+          target_commitish: ${{ github.ref_name }}
+          name: נגן Android 4.4 – v2.0.0
+          body: |
+            גרסה חדשה של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
+            כוללת APK להתקנה וקובץ ZIP עם קוד המקור.
+          files: |
+            releases/NaganMusic44-Android44.apk
+            releases/NaganMusic44-source.zip
+          fail_on_unmatched_files: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
