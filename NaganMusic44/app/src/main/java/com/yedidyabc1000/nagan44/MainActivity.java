@@ -421,7 +421,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         listView.setFocusableInTouchMode(true);
         listView.setItemsCanFocus(false);
         listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
-        adapter = new BrowserAdapter();
+        // Populate the shared browser model before creating the adapter.
+        // Each adapter receives its own snapshot so the previous ListView's
+        // item count is never changed behind its back during screen navigation.
+        populateBrowser();
+        adapter = new BrowserAdapter(new ArrayList<Entry>(visibleEntries));
         listView.setAdapter(adapter);
         root.addView(listView, new LinearLayout.LayoutParams(-1, 0, 1));
         listView.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -451,7 +455,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         miniPlayer = createMiniPlayer();
         if (currentSong != null) root.addView(miniPlayer, new LinearLayout.LayoutParams(-1, dp(44)));
         setContentView(root);
-        populateBrowser();
         updateTabs();
         listView.requestFocus();
         if (selectedPosition >= 0 && selectedPosition < visibleEntries.size()) listView.setSelection(selectedPosition);
@@ -489,12 +492,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void populateBrowser() {
-        if (detailLevel > 0) {
-            // Keep the entries assigned by showEntries(); never clear a detail list
-            // while recreating its ListView.
-            if (adapter != null) adapter.notifyDataSetChanged();
-            return;
-        }
+        // Detail entries are already held in visibleEntries by showEntries().
+        // The adapter gets a private snapshot after this method returns.
+        if (detailLevel > 0) return;
+
         visibleEntries.clear();
         if (activeTab == TAB_SONGS) {
             for (Song s : allSongs) visibleEntries.add(Entry.song(s));
@@ -511,7 +512,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             visibleEntries.add(Entry.playlist("כל השירים", allSongs.size() + " שירים", 2));
             visibleEntries.add(Entry.playlist("נוספו לאחרונה", "השירים שנוספו למכשיר לאחרונה", 3));
         }
-        adapter.notifyDataSetChanged();
     }
 
     private void showEntries(String title, ArrayList<Entry> entries) {
@@ -1087,8 +1087,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     };
 
     private class BrowserAdapter extends BaseAdapter {
-        @Override public int getCount() { return visibleEntries.size(); }
-        @Override public Object getItem(int position) { return visibleEntries.get(position); }
+        private final ArrayList<Entry> entries;
+
+        BrowserAdapter(ArrayList<Entry> snapshot) {
+            entries = snapshot == null ? new ArrayList<Entry>() : snapshot;
+        }
+
+        @Override public int getCount() { return entries.size(); }
+        @Override public Object getItem(int position) { return entries.get(position); }
         @Override public long getItemId(int position) { return position; }
         @Override public View getView(int position, View convertView, ViewGroup parent) {
             LinearLayout row;
@@ -1112,7 +1118,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 row.addView(title, new LinearLayout.LayoutParams(-1, -2));
                 row.addView(subtitle, new LinearLayout.LayoutParams(-1, -2));
             }
-            Entry entry = visibleEntries.get(position);
+            Entry entry = entries.get(position);
             title.setText(entry.title);
             String sub = entry.subtitle;
             if (entry.type == Entry.TYPE_SONG && currentSong != null && currentSong.id == entry.song.id) sub = "מתנגן עכשיו  •  " + currentSong.artist;
