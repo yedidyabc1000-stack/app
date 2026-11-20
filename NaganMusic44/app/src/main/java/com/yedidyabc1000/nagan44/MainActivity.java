@@ -1217,7 +1217,7 @@ remove now-playing top tabs        // Fixed, non-scrolling layout. Artwork recei
         FrameLayout artHolder = new FrameLayout(this);
         nowArt = new RoundImageView(this);
         nowArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        nowArt.setBackgroundDrawable(roundRect(0xffe5e8eb, 8));
+        nowArt.setBackgroundDrawable(roundRect(0xffe5e8eb, 15));
         nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.88f);
@@ -1327,7 +1327,7 @@ remove now-playing top tabs        // Fixed, non-scrolling layout. Artwork recei
                     @Override public void run() {
                         if (isFinishing() || currentSong == null || currentSong.id != songId
                                 || nowArt != target) {
-                            if (!bitmap.isRecycled()) bitmap.recycle();
+                            // The bitmap may still be held by the LRU cache; do not recycle it here.
                             return;
                         }
                         target.setImageBitmap(bitmap);
@@ -1894,6 +1894,7 @@ remove now-playing top tabs        // Fixed, non-scrolling layout. Artwork recei
 
     @Override protected void onDestroy() {
         libraryLoadToken++;
+        tabLoadToken++;
         seekDirection = 0; handler.removeCallbacks(heldSeekRunnable);
         unregisterMediaObserver(); handler.removeCallbacks(scanChangedMedia);
         handler.removeCallbacks(progressRunnable);
