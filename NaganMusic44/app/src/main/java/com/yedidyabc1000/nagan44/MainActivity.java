@@ -12,11 +12,15 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.util.Log;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -88,7 +92,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
     private static final String LIBRARY_CACHE_KEY = "library_cache_v1";
-    private static final int MAX_ARTWORK_SIZE = 512;
+    private static final int MAX_ARTWORK_SIZE = 1800;
     private static final String TAG = "NaganMusic44";
     private static final int COLOR_FOCUS = 0xffd6f0f2;
     private static final int COLOR_FOCUS_PRESSED = 0xffb6e4e8;
@@ -98,6 +102,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private final ArrayList<UserPlaylist> customPlaylists = new ArrayList<UserPlaylist>();
     private final Handler handler = new Handler();
     private final Random random = new Random();
+    private final HashMap<Integer, ArrayList<Entry>> browserEntriesCache = new HashMap<Integer, ArrayList<Entry>>();
+    private final android.util.LruCache<Long, Bitmap> artworkCache = new android.util.LruCache<Long, Bitmap>(12 * 1024 * 1024) {
+        @Override protected int sizeOf(Long key, Bitmap bitmap) { return bitmap == null ? 0 : bitmap.getByteCount(); }
+    };
+    private int libraryRevision = 0;
 
     private MediaPlayer player;
     private Song currentSong;
@@ -190,6 +199,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (cachedSongs.size() > 0) {
                 reconcileLibrary(cachedSongs);
                 renderBrowser();
+                prepareBrowserEntriesCacheAsync(new ArrayList<Song>(cachedSongs));
             } else {
                 loadLibraryAsync();
             }
@@ -297,10 +307,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() {
                 final ArrayList<Song> loadedSongs = scanLibrary();
                 final String cacheJson = serializeLibraryCache(loadedSongs);
+                final HashMap<Integer, ArrayList<Entry>> preparedEntries = prepareBaseBrowserEntries(loadedSongs);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (isFinishing() || token != libraryLoadToken) return;
                         reconcileLibrary(loadedSongs);
+                        browserEntriesCache.putAll(preparedEntries);
                         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                                 .putString(LIBRARY_CACHE_KEY, cacheJson).apply();
                         loading = false;
@@ -515,6 +527,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         for (Song song : loadedSongs) byId.put(song.id, song);
         Song oldCurrent = currentSong;
         allSongs.clear(); allSongs.addAll(loadedSongs);
+        libraryRevision++;
+        browserEntriesCache.clear();
         if (oldCurrent != null) {
             Song updated = byId.get(oldCurrent.id);
             if (updated == null) { releasePlayer(); currentSong = null; queue.clear(); queueIndex = -1; }
@@ -731,13 +745,18 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void populateBrowser() {
-        // Detail entries are already held in visibleEntries by showEntries().
-        // The adapter gets a private snapshot after this method returns.
+        // Detailed lists are already held in visibleEntries by showEntries().
         if (detailLevel > 0) return;
 
         visibleEntries.clear();
+        ArrayList<Entry> cached = browserEntriesCache.get(activeTab);
+        if (cached != null) {
+            visibleEntries.addAll(cached);
+            return;
+        }
+
         if (activeTab == TAB_SONGS) {
-            for (Song s : allSongs) visibleEntries.add(Entry.song(s));
+            for (Song song : allSongs) visibleEntries.add(Entry.song(song));
         } else if (activeTab == TAB_ARTISTS) {
             Map<String, ArrayList<Song>> artists = artistIndex();
             ArrayList<String> names = new ArrayList<String>(artists.keySet());
@@ -745,18 +764,58 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             for (String name : names) visibleEntries.add(Entry.artist(name, artists.get(name)));
         } else if (activeTab == TAB_ALBUMS) {
             ArrayList<AlbumGroup> albums = albumGroups(allSongs);
-            for (AlbumGroup a : albums) visibleEntries.add(Entry.album(a.title, artistLabel(a.songs), a.songs));
+            for (AlbumGroup album : albums) visibleEntries.add(Entry.album(album.title, artistLabel(album.songs), album.songs));
         } else {
             visibleEntries.add(Entry.action("יצירת רשימת השמעה", "יצירת פלייליסט חדש באפליקציה", 1));
             visibleEntries.add(Entry.action("ייבוא רשימת השמעה", "טעינת קובץ M3U או PLS מהמכשיר", 2));
             for (int i = 0; i < customPlaylists.size(); i++) {
-                UserPlaylist p = customPlaylists.get(i);
-                visibleEntries.add(Entry.playlist(p.name, p.songIds.size() + " שירים", CUSTOM_PLAYLIST_BASE + i));
+                UserPlaylist playlist = customPlaylists.get(i);
+                visibleEntries.add(Entry.playlist(playlist.name, playlist.songIds.size() + " שירים", CUSTOM_PLAYLIST_BASE + i));
             }
             visibleEntries.add(Entry.playlist("המושמעים ביותר", "השירים המושמעים ביותר לפי מספר השמעות", 1));
             visibleEntries.add(Entry.playlist("כל השירים", allSongs.size() + " שירים", 2));
             visibleEntries.add(Entry.playlist("נוספו לאחרונה", "השירים שנוספו למכשיר לאחרונה", 3));
         }
+        browserEntriesCache.put(activeTab, new ArrayList<Entry>(visibleEntries));
+    }
+
+    /** Build the heavy song, artist and album tabs away from the UI thread. */
+    private HashMap<Integer, ArrayList<Entry>> prepareBaseBrowserEntries(List<Song> songs) {
+        HashMap<Integer, ArrayList<Entry>> result = new HashMap<Integer, ArrayList<Entry>>();
+
+        ArrayList<Entry> songEntries = new ArrayList<Entry>();
+        for (Song song : songs) songEntries.add(Entry.song(song));
+        result.put(TAB_SONGS, songEntries);
+
+        Map<String, ArrayList<Song>> artists = artistIndex(songs);
+        ArrayList<String> artistNames = new ArrayList<String>(artists.keySet());
+        Collections.sort(artistNames, STRING_SORT);
+        ArrayList<Entry> artistEntries = new ArrayList<Entry>();
+        for (String name : artistNames) artistEntries.add(Entry.artist(name, artists.get(name)));
+        result.put(TAB_ARTISTS, artistEntries);
+
+        ArrayList<Entry> albumEntries = new ArrayList<Entry>();
+        ArrayList<AlbumGroup> albums = albumGroups(songs);
+        for (AlbumGroup album : albums) albumEntries.add(Entry.album(album.title, artistLabel(album.songs), album.songs));
+        result.put(TAB_ALBUMS, albumEntries);
+        return result;
+    }
+
+    private void prepareBrowserEntriesCacheAsync(final ArrayList<Song> snapshot) {
+        final int revision = libraryRevision;
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                final HashMap<Integer, ArrayList<Entry>> prepared = prepareBaseBrowserEntries(snapshot);
+                handler.post(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing() || revision != libraryRevision || snapshot.size() != allSongs.size()) return;
+                        browserEntriesCache.putAll(prepared);
+                    }
+                });
+            }
+        }, "nagan-browser-cache");
+        worker.setPriority(Thread.MIN_PRIORITY);
+        worker.start();
     }
 
     private void showEntries(String title, ArrayList<Entry> entries) {
@@ -894,6 +953,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private void addSongToPlaylist(UserPlaylist playlist, Song song) {
         if (playlist == null || song == null) return;
         if (!playlist.songIds.contains(song.id)) playlist.songIds.add(song.id);
+        browserEntriesCache.remove(TAB_PLAYLISTS);
         saveUserPlaylists();
         Toast.makeText(this, "נוסף ל־" + playlist.name, Toast.LENGTH_SHORT).show();
         if (activeTab == TAB_PLAYLISTS && detailLevel == 0) renderBrowser();
@@ -908,7 +968,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         if (name.length() == 0) { Toast.makeText(MainActivity.this, "יש להזין שם", Toast.LENGTH_SHORT).show(); return; }
                         UserPlaylist playlist = new UserPlaylist(name);
                         if (firstSong != null) playlist.songIds.add(firstSong.id);
-                        customPlaylists.add(playlist); saveUserPlaylists();
+                        customPlaylists.add(playlist); browserEntriesCache.remove(TAB_PLAYLISTS); saveUserPlaylists();
                         Toast.makeText(MainActivity.this, "רשימת ההשמעה נוצרה", Toast.LENGTH_SHORT).show();
                         if (activeTab == TAB_PLAYLISTS && detailLevel == 0) renderBrowser();
                     }
@@ -943,7 +1003,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (displayName == null || displayName.length() == 0) displayName = "רשימה מיובאת";
         int dot = displayName.lastIndexOf('.'); if (dot > 0) displayName = displayName.substring(0, dot);
         UserPlaylist playlist = new UserPlaylist(displayName); for (Song song : selected) playlist.songIds.add(song.id);
-        customPlaylists.add(playlist); saveUserPlaylists();
+        customPlaylists.add(playlist); browserEntriesCache.remove(TAB_PLAYLISTS); saveUserPlaylists();
         Toast.makeText(this, "יובאו " + selected.size() + " שירים", Toast.LENGTH_LONG).show();
         activeTab = TAB_PLAYLISTS; lastContentTab = TAB_PLAYLISTS; detailLevel = 0; renderBrowser();
     }
@@ -998,9 +1058,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("user_playlists_v1", array.toString()).apply();
     }
 
-    private Map<String, ArrayList<Song>> artistIndex() {
+    private Map<String, ArrayList<Song>> artistIndex() { return artistIndex(allSongs); }
+
+    private Map<String, ArrayList<Song>> artistIndex(List<Song> sourceSongs) {
         Map<String, ArrayList<Song>> result = new LinkedHashMap<String, ArrayList<Song>>();
-        for (Song song : allSongs) {
+        for (Song song : sourceSongs) {
             String[] names = splitArtists(song.artist);
             for (String name : names) {
                 if (name.length() == 0) continue;
@@ -1126,7 +1188,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         content.setPadding(dp(12), 0, dp(12), 0);
 
         FrameLayout artHolder = new FrameLayout(this);
-        nowArt = new ImageView(this);
+        nowArt = new RoundImageView(this);
         nowArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
         nowArt.setBackgroundDrawable(roundRect(0xffe5e8eb, 8));
         nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
@@ -1246,26 +1308,69 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         worker.start();
     }
 
-    private void installHoldSeek(View control, final int direction) {
-        control.setOnLongClickListener(new View.OnLongClickListener() {
-            @Override public boolean onLongClick(View v) {
+    /**
+     * Handle the whole press gesture ourselves. The platform long-click callback
+     * can race with ACTION_UP on older touch drivers; this timer-based gesture
+     * starts seeking after 450 ms and repeats until the finger is released.
+     */
+    private void installHoldSeek(final View control, final int direction) {
+        final boolean[] isPressed = new boolean[]{false};
+        final boolean[] didSeek = new boolean[]{false};
+        final Runnable beginSeeking = new Runnable() {
+            @Override public void run() {
+                if (!isPressed[0]) return;
+                didSeek[0] = true;
                 seekDirection = direction;
-                handler.removeCallbacks(heldSeekRunnable);
                 seekBy(direction * 2000);
+                handler.removeCallbacks(heldSeekRunnable);
                 handler.postDelayed(heldSeekRunnable, 350L);
-                return true;
             }
-        });
+        };
+
+        control.setLongClickable(false);
         control.setOnTouchListener(new View.OnTouchListener() {
-            @Override public boolean onTouch(View v, MotionEvent event) {
-                int action = event.getAction();
-                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                    if (seekDirection == direction) {
+            @Override public boolean onTouch(View view, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        isPressed[0] = true;
+                        didSeek[0] = false;
+                        view.setPressed(true);
+                        handler.removeCallbacks(beginSeeking);
+                        handler.postDelayed(beginSeeking, 450L);
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        if (!isPressed[0]) return true;
+                        isPressed[0] = false;
+                        handler.removeCallbacks(beginSeeking);
+                        view.setPressed(false);
+                        if (didSeek[0]) {
+                            seekDirection = 0;
+                            handler.removeCallbacks(heldSeekRunnable);
+                        } else {
+                            view.performClick();
+                        }
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:
+                        isPressed[0] = false;
+                        handler.removeCallbacks(beginSeeking);
                         seekDirection = 0;
                         handler.removeCallbacks(heldSeekRunnable);
-                    }
+                        view.setPressed(false);
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        if (event.getX() < -dp(12) || event.getX() > view.getWidth() + dp(12)
+                                || event.getY() < -dp(12) || event.getY() > view.getHeight() + dp(12)) {
+                            isPressed[0] = false;
+                            handler.removeCallbacks(beginSeeking);
+                            if (didSeek[0]) {
+                                seekDirection = 0;
+                                handler.removeCallbacks(heldSeekRunnable);
+                            }
+                            view.setPressed(false);
+                        }
+                        return true;
                 }
-                return false;
+                return true;
             }
         });
     }
@@ -1302,8 +1407,25 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int artworkSampleSize(int width, int height) {
         int sample = 1;
         int largest = Math.max(width, height);
-        while (largest / sample > MAX_ARTWORK_SIZE) sample *= 2;
+        while (largest / (sample * 2) >= MAX_ARTWORK_SIZE) sample *= 2;
         return Math.max(1, sample);
+    }
+
+    private Bitmap finishArtworkDecode(Bitmap bitmap) {
+        if (bitmap == null) return null;
+        int largest = Math.max(bitmap.getWidth(), bitmap.getHeight());
+        if (largest <= MAX_ARTWORK_SIZE) return bitmap;
+        float scale = (float) MAX_ARTWORK_SIZE / (float) largest;
+        int width = Math.max(1, Math.round(bitmap.getWidth() * scale));
+        int height = Math.max(1, Math.round(bitmap.getHeight() * scale));
+        try {
+            Bitmap scaled = Bitmap.createScaledBitmap(bitmap, width, height, true);
+            if (scaled != bitmap) bitmap.recycle();
+            return scaled;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not resize artwork", error);
+            return bitmap;
+        }
     }
 
     private Bitmap decodeArtworkFile(String path) {
@@ -1314,10 +1436,29 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inSampleSize = artworkSampleSize(bounds.outWidth, bounds.outHeight);
-            options.inPreferredConfig = Bitmap.Config.RGB_565;
-            return BitmapFactory.decodeFile(path, options);
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            options.inDither = false;
+            return finishArtworkDecode(BitmapFactory.decodeFile(path, options));
         } catch (RuntimeException error) {
-            Log.w(TAG, "Could not decode album artwork file", error);
+            Log.w(TAG, "Could not decode album artwork file " + path, error);
+            return null;
+        }
+    }
+
+    private Bitmap decodeArtworkBytes(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return null;
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = artworkSampleSize(bounds.outWidth, bounds.outHeight);
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            options.inDither = false;
+            return finishArtworkDecode(BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options));
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not decode embedded album artwork", error);
             return null;
         }
     }
@@ -1335,31 +1476,87 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inSampleSize = artworkSampleSize(bounds.outWidth, bounds.outHeight);
-            options.inPreferredConfig = Bitmap.Config.RGB_565;
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            options.inDither = false;
             input = getContentResolver().openInputStream(uri);
-            return input == null ? null : BitmapFactory.decodeStream(input, null, options);
+            return input == null ? null : finishArtworkDecode(BitmapFactory.decodeStream(input, null, options));
         } catch (Exception error) {
-            Log.w(TAG, "Could not decode album artwork URI", error);
+            Log.w(TAG, "Could not decode album artwork URI " + uri, error);
             return null;
         } finally {
             if (input != null) try { input.close(); } catch (Exception ignored) { }
         }
     }
 
-    private Bitmap loadArtwork(Song song) {
+    private Bitmap decodeEmbeddedArtwork(Song song) {
         if (song == null) return null;
-        if (song.albumArtPath != null) {
-            File file = new File(song.albumArtPath);
-            if (file.exists()) {
-                Bitmap bitmap = decodeArtworkFile(song.albumArtPath);
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            if (song.path != null && song.path.length() > 0) {
+                retriever.setDataSource(song.path);
+            } else if (song.uri != null) {
+                retriever.setDataSource(this, song.uri);
+            } else {
+                return null;
+            }
+            return decodeArtworkBytes(retriever.getEmbeddedPicture());
+        } catch (Exception error) {
+            Log.d(TAG, "No embedded artwork for song " + song.id, error);
+            return null;
+        } finally {
+            try { retriever.release(); } catch (Exception ignored) { }
+        }
+    }
+
+    private Bitmap findFolderArtwork(Song song) {
+        if (song == null || song.path == null) return null;
+        File folder = new File(song.path).getParentFile();
+        if (folder == null || !folder.isDirectory()) return null;
+
+        String[] preferred = new String[]{
+                "cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.jpeg",
+                "folder.png", "front.jpg", "front.png", "albumart.jpg", "albumart.png"
+        };
+        for (String name : preferred) {
+            File candidate = new File(folder, name);
+            if (candidate.isFile()) {
+                Bitmap bitmap = decodeArtworkFile(candidate.getAbsolutePath());
                 if (bitmap != null) return bitmap;
             }
         }
-        if (song.albumId >= 0) {
-            Uri artUri = Uri.parse("content://media/external/audio/albumart/" + song.albumId);
-            return decodeArtworkUri(artUri);
+
+        File[] images = folder.listFiles();
+        if (images == null) return null;
+        File best = null;
+        for (File candidate : images) {
+            if (!candidate.isFile()) continue;
+            String name = candidate.getName().toLowerCase(Locale.US);
+            if (!(name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png")
+                    || name.endsWith(".webp"))) continue;
+            if (best == null || candidate.length() > best.length()) best = candidate;
         }
-        return null;
+        return best == null ? null : decodeArtworkFile(best.getAbsolutePath());
+    }
+
+    private Bitmap loadArtwork(Song song) {
+        if (song == null) return null;
+        Bitmap cached = artworkCache.get(song.id);
+        if (cached != null && !cached.isRecycled()) return cached;
+
+        // Embedded covers are often the original, highest-resolution image and
+        // are not always exposed through MediaStore's ALBUM_ART path.
+        Bitmap bitmap = decodeEmbeddedArtwork(song);
+        if (bitmap == null) bitmap = findFolderArtwork(song);
+        if (bitmap == null && song.albumArtPath != null) {
+            File file = new File(song.albumArtPath);
+            if (file.isFile()) bitmap = decodeArtworkFile(song.albumArtPath);
+        }
+        if (bitmap == null && song.albumId >= 0) {
+            Uri artUri = Uri.parse("content://media/external/audio/albumart/" + song.albumId);
+            bitmap = decodeArtworkUri(artUri);
+        }
+        if (bitmap != null && !bitmap.isRecycled()) artworkCache.put(song.id, bitmap);
+        return bitmap;
     }
 
     private void updatePlayerButtons() {
@@ -1757,6 +1954,34 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             subtitle.setText(sub);
             row.setSelected(position == selectedPosition);
             return row;
+        }
+    }
+
+    private class RoundImageView extends ImageView {
+        private final Path clipPath = new Path();
+        private final RectF clipBounds = new RectF();
+        private final float cornerRadius;
+
+        RoundImageView(Activity context) {
+            super(context);
+            cornerRadius = 12f * getResources().getDisplayMetrics().density;
+        }
+
+        @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+            super.onSizeChanged(width, height, oldWidth, oldHeight);
+            clipBounds.set(0, 0, width, height);
+            clipPath.reset();
+            if (width > 0 && height > 0) {
+                clipPath.addRoundRect(clipBounds, cornerRadius, cornerRadius, Path.Direction.CW);
+            }
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            if (clipBounds.isEmpty()) { super.onDraw(canvas); return; }
+            int save = canvas.save();
+            canvas.clipPath(clipPath);
+            super.onDraw(canvas);
+            canvas.restoreToCount(save);
         }
     }
 
