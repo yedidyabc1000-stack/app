@@ -61,6 +61,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           mkdir -p releases
           cp payload/source/NaganMusic44/app/build/outputs/apk/debug/app-debug.apk releases/NaganMusic44-Android44.apk
           cp payload/NaganMusic44.zip releases/NaganMusic44-source.zip
@@ -68,7 +69,6 @@ jobs:
           rm -rf NaganMusic44/app/build
           rm -rf .build
           rm -f ANDROID44_BUILD_TRIGGER.txt
-          git pull --rebase origin "${GITHUB_REF_NAME}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
