@@ -65,9 +65,9 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.1
+          tag_name: v2.0.2
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.0.1
+          name: נגן Android 4.4 – v2.0.2
           body: |
             גרסה חדשה של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
             כוללת תיקון לתקיעת מסך הפתיחה: סריקת המוזיקה מתבצעת ברקע ולא חוסמת את ממשק המשתמש. כוללת APK וקובץ ZIP עם קוד המקור.
