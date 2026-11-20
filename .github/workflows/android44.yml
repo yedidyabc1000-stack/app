@@ -4,7 +4,7 @@ on:
     branches:
       - android44-rebuild
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -56,6 +56,22 @@ jobs:
         run: |
           cd payload/source/NaganMusic44
           gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Publish source and APK to repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p releases
+          cp payload/source/NaganMusic44/app/build/outputs/apk/debug/app-debug.apk releases/NaganMusic44-Android44.apk
+          cp payload/NaganMusic44.zip releases/NaganMusic44-source.zip
+          cp -a payload/source/NaganMusic44 ./NaganMusic44
+          rm -rf NaganMusic44/app/build
+          rm -rf .build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Publish Android 4.4 source and APK [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
