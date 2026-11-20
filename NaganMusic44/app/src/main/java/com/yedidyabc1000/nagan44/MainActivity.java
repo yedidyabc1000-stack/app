@@ -16,6 +16,9 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.BitmapShader;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.StateListDrawable;
+import android.util.Log;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
@@ -29,6 +32,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -71,6 +75,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_TEXT = 0xff202020;
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
+    private static final String TAG = "NaganMusic44";
+    private static final int COLOR_FOCUS = 0xffd6f0f2;
+    private static final int COLOR_FOCUS_PRESSED = 0xffb6e4e8;
 
     private final ArrayList<Song> allSongs = new ArrayList<Song>();
     private final ArrayList<Song> queue = new ArrayList<Song>();
@@ -339,6 +346,24 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         return value.trim();
     }
 
+    private StateListDrawable createRowSelector() {
+        StateListDrawable selector = new StateListDrawable();
+        selector.addState(new int[]{android.R.attr.state_pressed}, new ColorDrawable(COLOR_FOCUS_PRESSED));
+        selector.addState(new int[]{android.R.attr.state_focused}, new ColorDrawable(COLOR_FOCUS));
+        selector.addState(new int[]{android.R.attr.state_selected}, new ColorDrawable(COLOR_FOCUS));
+        selector.addState(new int[]{}, new ColorDrawable(COLOR_ROW));
+        return selector;
+    }
+
+    private StateListDrawable createTabSelector() {
+        StateListDrawable selector = new StateListDrawable();
+        selector.addState(new int[]{android.R.attr.state_pressed}, new ColorDrawable(COLOR_FOCUS_PRESSED));
+        selector.addState(new int[]{android.R.attr.state_focused}, new ColorDrawable(COLOR_FOCUS));
+        selector.addState(new int[]{android.R.attr.state_selected}, new ColorDrawable(0xfff8f8f8));
+        selector.addState(new int[]{}, new ColorDrawable(0xffdddddd));
+        return selector;
+    }
+
     private void renderBrowser() {
         showingNowPlaying = false;
         root = new LinearLayout(this);
@@ -364,7 +389,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         TextView refresh = text("⟳", 22, 0xffffffff, true);
         refresh.setGravity(Gravity.CENTER);
         refresh.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { loadLibraryAsync(); }
+            @Override public void onClick(View v) {
+                try { loadLibraryAsync(); }
+                catch (RuntimeException error) { reportUiError("רענון הספרייה", error); }
+            }
         });
         toolbar.addView(refresh, new LinearLayout.LayoutParams(dp(36), -1));
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(36)));
@@ -388,12 +416,37 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         listView.setBackgroundColor(COLOR_BG);
         listView.setDivider(new android.graphics.drawable.ColorDrawable(0xffd8d8d8));
         listView.setDividerHeight(1);
-        listView.setSelector(android.R.drawable.list_selector_background);
+        listView.setSelector(createRowSelector());
         listView.setFocusable(true);
+        listView.setFocusableInTouchMode(true);
+        listView.setItemsCanFocus(false);
+        listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
         adapter = new BrowserAdapter();
         listView.setAdapter(adapter);
         root.addView(listView, new LinearLayout.LayoutParams(-1, 0, 1));
-        listView.setOnItemClickListener((parent, view, position, id) -> onEntrySelected(position));
+        listView.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position < 0 || position >= visibleEntries.size()) return;
+                int previous = selectedPosition;
+                selectedPosition = position;
+                if (previous >= 0) {
+                    int oldChild = previous - listView.getFirstVisiblePosition();
+                    if (oldChild >= 0 && oldChild < listView.getChildCount()) {
+                        listView.getChildAt(oldChild).setSelected(false);
+                    }
+                }
+                if (view != null) view.setSelected(true);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
+        listView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                selectedPosition = position;
+                if (view != null) view.setSelected(true);
+                if (adapter != null) adapter.notifyDataSetChanged();
+                handleEntryClick(position);
+            }
+        });
 
         miniPlayer = createMiniPlayer();
         if (currentSong != null) root.addView(miniPlayer, new LinearLayout.LayoutParams(-1, dp(44)));
@@ -409,12 +462,18 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         item.setGravity(Gravity.CENTER);
         item.setPadding(dp(13), 0, dp(13), 0);
         item.setFocusable(true);
+        item.setBackgroundDrawable(createTabSelector());
+        item.setSelected(tab == activeTab);
         item.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                if (detailLevel != 0) detailLevel = 0;
-                activeTab = tab;
-                selectedPosition = 0;
-                renderBrowser();
+                try {
+                    if (detailLevel != 0) detailLevel = 0;
+                    activeTab = tab;
+                    selectedPosition = 0;
+                    renderBrowser();
+                } catch (RuntimeException error) {
+                    reportUiError("מעבר בין לשוניות", error);
+                }
             }
         });
         tabsRow.addView(item, new LinearLayout.LayoutParams(-2, -1));
@@ -425,7 +484,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         for (int i = 0; i < tabsRow.getChildCount(); i++) {
             TextView tab = (TextView) tabsRow.getChildAt(i);
             tab.setTextColor(i == activeTab ? COLOR_ACCENT : COLOR_TEXT);
-            tab.setBackgroundColor(i == activeTab ? 0xfff8f8f8 : 0xffdddddd);
+            tab.setSelected(i == activeTab);
         }
     }
 
@@ -477,35 +536,62 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         showEntries(title, entries);
     }
 
+    private void handleEntryClick(int position) {
+        try {
+            onEntrySelected(position);
+        } catch (RuntimeException error) {
+            reportUiError("פתיחת פריט", error);
+        }
+    }
+
+    private void reportUiError(String action, RuntimeException error) {
+        Log.e(TAG, action + " failed", error);
+        String detail = error.getClass().getSimpleName();
+        Toast.makeText(this, "לא ניתן לבצע פעולה (" + detail + ")", Toast.LENGTH_LONG).show();
+    }
+
     private void onEntrySelected(int position) {
         if (position < 0 || position >= visibleEntries.size()) return;
         selectedPosition = position;
         Entry entry = visibleEntries.get(position);
+        if (entry == null) return;
+
         if (entry.type == Entry.TYPE_SONG) {
+            if (entry.song == null) return;
             ArrayList<Song> playQueue = new ArrayList<Song>();
-            for (Entry e : visibleEntries) if (e.type == Entry.TYPE_SONG) playQueue.add(e.song);
+            for (Entry e : visibleEntries) {
+                if (e != null && e.type == Entry.TYPE_SONG && e.song != null) playQueue.add(e.song);
+            }
             int index = playQueue.indexOf(entry.song);
-            startTrack(playQueue, index);
+            if (index >= 0) startTrack(playQueue, index);
         } else if (entry.type == Entry.TYPE_ARTIST) {
-            ArrayList<AlbumGroup> albums = albumGroups(entry.songs);
+            ArrayList<Song> artistSongs = entry.songs == null
+                    ? new ArrayList<Song>() : new ArrayList<Song>(entry.songs);
+            ArrayList<AlbumGroup> albums = albumGroups(artistSongs);
             if (albums.size() > 1) {
                 ArrayList<Entry> entries = new ArrayList<Entry>();
-                for (AlbumGroup a : albums) entries.add(Entry.artistAlbum(a.title, artistLabel(a.songs), a.songs));
+                for (AlbumGroup a : albums) {
+                    entries.add(Entry.artistAlbum(a.title, artistLabel(a.songs), a.songs));
+                }
                 showEntries(entry.title, entries);
             } else {
-                showTrackList(entry.title, new ArrayList<Song>(entry.songs));
+                showTrackList(entry.title, artistSongs);
             }
         } else if (entry.type == Entry.TYPE_ALBUM || entry.type == Entry.TYPE_ARTIST_ALBUM) {
-            showTrackList(entry.title, new ArrayList<Song>(entry.songs));
+            showTrackList(entry.title, entry.songs == null
+                    ? new ArrayList<Song>() : new ArrayList<Song>(entry.songs));
         } else if (entry.type == Entry.TYPE_PLAYLIST) {
             ArrayList<Song> selected = new ArrayList<Song>();
             if (entry.playlistId == 1) {
                 Map<Long, Integer> counts = getPlayCounts();
-                for (Song s : allSongs) if (counts.containsKey(s.id) && counts.get(s.id) > 0) selected.add(s);
+                for (Song s : allSongs) {
+                    Integer count = counts.get(s.id);
+                    if (count != null && count.intValue() > 0) selected.add(s);
+                }
                 Collections.sort(selected, new Comparator<Song>() {
                     @Override public int compare(Song a, Song b) {
                         int ca = getCount(a.id), cb = getCount(b.id);
-                        if (ca != cb) return cb - ca;
+                        if (ca != cb) return cb < ca ? -1 : 1;
                         return STRING_SORT.compare(a.title, b.title);
                     }
                 });
@@ -514,7 +600,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             } else {
                 selected.addAll(allSongs);
                 Collections.sort(selected, new Comparator<Song>() {
-                    @Override public int compare(Song a, Song b) { return Long.compare(b.dateAdded, a.dateAdded); }
+                    @Override public int compare(Song a, Song b) {
+                        if (a.dateAdded == b.dateAdded) return 0;
+                        return b.dateAdded < a.dateAdded ? -1 : 1;
+                    }
                 });
             }
             showTrackList(entry.title, selected);
@@ -994,7 +1083,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 row.setOrientation(LinearLayout.VERTICAL);
                 row.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
                 row.setPadding(dp(12), dp(5), dp(12), dp(5));
-                row.setBackgroundColor(COLOR_ROW);
+                row.setBackgroundDrawable(createRowSelector());
+                row.setFocusable(false);
                 title = text("", 15, COLOR_TEXT, true);
                 title.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
                 subtitle = text("", 11, COLOR_SUB, false);
@@ -1008,6 +1098,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (entry.type == Entry.TYPE_SONG && currentSong != null && currentSong.id == entry.song.id) sub = "מתנגן עכשיו  •  " + currentSong.artist;
             if (sub == null || sub.length() == 0) sub = " ";
             subtitle.setText(sub);
+            row.setSelected(position == selectedPosition);
             return row;
         }
     }
