@@ -25,8 +25,11 @@ jobs:
 
       - name: Install Android platform
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export PATH="$ANDROID_HOME/cmdline-tools/16.0/bin:$ANDROID_HOME/platform-tools:$PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --licenses
+          "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Reassemble source archive
         shell: bash
