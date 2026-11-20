@@ -49,7 +49,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android-2.1.4
+          name: nagan-android-2.1.5
           path: |
             NaganMusic44/app/build/outputs/apk/debug/app-debug.apk
             NaganMusic44-source.zip
@@ -60,11 +60,11 @@ jobs:
         if: github.ref == 'refs/heads/android44-rebuild' && github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.1.4
+          tag_name: v2.1.5
           target_commitish: android44-rebuild
-          name: נגן 2.1.4
+          name: נגן 2.1.5
           body: |
-            גרסה 2.1.4 לנגן Android 4.4.
+            גרסה 2.1.5 לנגן Android 4.4.
             שופרה הרצה קדימה ואחורה בלחיצה ממושכת.
             תמונות עטיפה נשלפות גם מתוך המטא־נתונים המוטמעים ובתיקיות האלבומים, באיכות גבוהה יותר ועם פינות מעוגלות.
             רשימות שירים, אמנים ואלבומים מוכנות מראש ברקע למעבר מהיר.
