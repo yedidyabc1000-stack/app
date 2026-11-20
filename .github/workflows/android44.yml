@@ -1,0 +1,88 @@
+name: Build NaganMusic44
+on:
+  push:
+    branches:
+      - android44-rebuild
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+
+      - name: Install Android platform
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Prepare source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/NaganMusic44-source.zip
+          zip -qr /tmp/NaganMusic44-source.zip NaganMusic44 -x 'NaganMusic44/**/build/*' 'NaganMusic44/**/.gradle/*'
+
+      - name: Build APK
+        run: |
+          cd NaganMusic44
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Publish source and APK to repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          mkdir -p releases
+          cp NaganMusic44/app/build/outputs/apk/debug/app-debug.apk releases/NaganMusic44-Android44.apk
+          cp /tmp/NaganMusic44-source.zip releases/NaganMusic44-source.zip
+          git add releases/NaganMusic44-Android44.apk releases/NaganMusic44-source.zip
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Publish Android 4.4 source and APK [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.0.5
+          target_commitish: ${{ github.ref_name }}
+          name: נגן Android 4.4 – v2.0.5
+          body: |
+            גרסה חדשה של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
+            כוללת תיקון לשגיאת IllegalStateException בניווט: כל מסך רשימה מקבל עותק עצמאי של נתוני המתאם, כך שרשימות קודמות אינן משתנות מאחורי ה-ListView. כוללת גם את תיקוני מסך הנגן והעטיפות.
+          files: |
+            releases/NaganMusic44-Android44.apk
+            releases/NaganMusic44-source.zip
+          fail_on_unmatched_files: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: nagan-android44-debug-apk
+          path: releases/NaganMusic44-Android44.apk
+          if-no-files-found: error
+          retention-days: 14
