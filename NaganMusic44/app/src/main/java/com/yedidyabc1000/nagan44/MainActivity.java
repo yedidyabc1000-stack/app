@@ -148,7 +148,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int seekDirection = 0;
     private final Runnable heldSeekRunnable = new Runnable() {
         @Override public void run() {
-            if (seekDirection != 0) { seekBy(seekDirection * 4000); handler.postDelayed(this, 220L); }
+            if (seekDirection != 0) { seekBy(seekDirection * 2000); handler.postDelayed(this, 350L); }
         }
     };
     private ContentObserver mediaObserver;
@@ -1012,6 +1012,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (activeTab != TAB_NOW_PLAYING) lastContentTab = activeTab;
         activeTab = TAB_NOW_PLAYING;
         showingNowPlaying = true;
+        shuffleButton = null;
+        repeatButton = null;
         nowPlayingRoot = new LinearLayout(this);
         nowPlayingRoot.setOrientation(LinearLayout.VERTICAL);
         nowPlayingRoot.setBackgroundColor(COLOR_BG);
@@ -1035,7 +1037,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        content.setPadding(dp(12), dp(4), dp(12), dp(2));
+        content.setPadding(dp(12), 0, dp(12), 0);
 
         FrameLayout artHolder = new FrameLayout(this);
         nowArt = new RoundArtView(this);
@@ -1044,19 +1046,19 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 ? BitmapFactory.decodeResource(getResources(), R.drawable.albumart_mp_unknown_new) : art);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 1f);
-        artParams.bottomMargin = dp(4);
+        artParams.bottomMargin = dp(2);
         content.addView(artHolder, artParams);
 
         nowTitle = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 17, COLOR_TEXT, true);
         nowTitle.setGravity(Gravity.CENTER);
         nowTitle.setSingleLine(true);
-        content.addView(nowTitle, new LinearLayout.LayoutParams(-1, dp(22)));
+        content.addView(nowTitle, new LinearLayout.LayoutParams(-1, dp(20)));
         nowArtist = text(currentSong == null ? "" : currentSong.artist, 13, COLOR_SUB, false);
         nowArtist.setGravity(Gravity.CENTER);
-        content.addView(nowArtist, new LinearLayout.LayoutParams(-1, dp(18)));
+        content.addView(nowArtist, new LinearLayout.LayoutParams(-1, dp(15)));
         nowAlbum = text(currentSong == null ? "" : currentSong.album, 12, COLOR_SUB, false);
         nowAlbum.setGravity(Gravity.CENTER);
-        content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, dp(17)));
+        content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, dp(14)));
 
         LinearLayout timeline = new LinearLayout(this);
         timeline.setOrientation(LinearLayout.VERTICAL);
@@ -1088,7 +1090,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { }
             }
         });
-        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(25)));
+        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(20)));
         LinearLayout times = new LinearLayout(this);
         times.setOrientation(LinearLayout.HORIZONTAL);
         times.setGravity(Gravity.CENTER_VERTICAL);
@@ -1097,15 +1099,15 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         times.addView(elapsedText, new LinearLayout.LayoutParams(0, -2, 1));
         durationText.setGravity(Gravity.RIGHT);
         times.addView(durationText, new LinearLayout.LayoutParams(0, -2, 1));
-        timeline.addView(times, new LinearLayout.LayoutParams(-1, dp(15)));
-        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(40));
-        timelineParams.topMargin = dp(2);
+        timeline.addView(times, new LinearLayout.LayoutParams(-1, dp(13)));
+        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(34));
+        timelineParams.topMargin = dp(1);
         content.addView(timeline, timelineParams);
 
         LinearLayout controls = new LinearLayout(this);
         controls.setGravity(Gravity.CENTER);
         controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setPadding(0, dp(3), 0, dp(2));
+        controls.setPadding(0, dp(1), 0, dp(1));
         TransportButton previous = new TransportButton(this, false);
         previous.setContentDescription("השיר הקודם; לחיצה ארוכה: הרצה אחורה");
         previous.setBackgroundDrawable(roundRect(0xffe7ecef, 24));
@@ -1113,8 +1115,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void onClick(View v) { playPrevious(); }
         });
         installHoldSeek(previous, -1);
-        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(52), dp(44));
-        sideParams.rightMargin = dp(22);
+        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(50), dp(40));
+        sideParams.rightMargin = dp(16);
         controls.addView(previous, sideParams);
 
         nowPlayButton = controlImage(isPlaying()
@@ -1124,7 +1126,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(50), dp(50)));
+        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         TransportButton next = new TransportButton(this, true);
         next.setContentDescription("השיר הבא; לחיצה ארוכה: הרצה קדימה");
@@ -1133,10 +1135,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void onClick(View v) { playNext(true); }
         });
         installHoldSeek(next, 1);
-        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(52), dp(44));
-        nextParams.leftMargin = dp(22);
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(50), dp(40));
+        nextParams.leftMargin = dp(16);
         controls.addView(next, nextParams);
-        content.addView(controls, new LinearLayout.LayoutParams(-1, dp(54)));
+        content.addView(controls, new LinearLayout.LayoutParams(-1, dp(46)));
 
         nowPlayingRoot.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(nowPlayingRoot);
