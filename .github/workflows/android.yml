@@ -2,7 +2,7 @@ name: Build Android 4.4 music player
 
 on:
   push:
-    branches: [ main, android44-rebuild ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
