@@ -60,6 +60,9 @@ import java.io.File;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -86,6 +89,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int TAB_ALBUMS = 2;
     private static final int TAB_PLAYLISTS = 3;
     private static final int TAB_NOW_PLAYING = 4;
+    private static final int TAB_MIXES = 5;
+    private static final int MIX_ACTION_BASE = 100;
+    private static final int MIX_HAPPY = 101;
+    private static final int MIX_SAD = 102;
+    private static final int MIX_THOUGHTFUL = 103;
+    private static final int MIX_RELAXED = 104;
+    private static final int MIX_ENERGETIC = 105;
+    private static final int MIX_DRAMATIC = 106;
     private static final int REQUEST_IMPORT_PLAYLIST = 411;
     private static final int CUSTOM_PLAYLIST_BASE = 1000;
     private static final int COLOR_DARK = 0xff252525;
@@ -97,6 +108,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
     private static final String LIBRARY_CACHE_KEY = "library_cache_v1";
+    private static final int MOOD_TAG_READER_VERSION = 1;
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
     private static final int COLOR_FOCUS = 0xffb7d2d6;
@@ -105,6 +117,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private final ArrayList<Song> allSongs = new ArrayList<Song>();
     private final ArrayList<Song> queue = new ArrayList<Song>();
     private final ArrayList<UserPlaylist> customPlaylists = new ArrayList<UserPlaylist>();
+    private HashMap<Integer, ArrayList<Song>> moodMixIndex = new HashMap<Integer, ArrayList<Song>>();
+    private boolean moodTagScanRunning = false;
+    private int moodTagScanToken = 0;
     private final Handler handler = new Handler();
     private final Random random = new Random();
     private final HashMap<Integer, ArrayList<Entry>> browserEntriesCache = new HashMap<Integer, ArrayList<Entry>>();
@@ -216,6 +231,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 reconcileLibrary(cachedSongs);
                 renderBrowser();
                 prepareBrowserEntriesCacheAsync(new ArrayList<Song>(cachedSongs));
+                scanMissingMoodTagsAsync();
             } else {
                 loadLibraryAsync();
             }
@@ -375,6 +391,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 if (song.albumArtPath.length() == 0) song.albumArtPath = null;
                 song.albumArtist = item.optString("albumArtist", "");
                 if (song.albumArtist.length() == 0) song.albumArtist = null;
+                song.key = item.optString("musicKey", "");
+                if (song.key.length() == 0) song.key = null;
+                song.bpm = item.optInt("bpm", 0);
+                song.moodTagsScanned = item.optBoolean("moodTagsScanned", false);
                 song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
                 songs.add(song);
             }
@@ -402,6 +422,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 item.put("path", song.path == null ? "" : song.path);
                 item.put("albumArtPath", song.albumArtPath == null ? "" : song.albumArtPath);
                 item.put("albumArtist", song.albumArtist == null ? "" : song.albumArtist);
+                item.put("musicKey", song.key == null ? "" : song.key);
+                item.put("bpm", song.bpm);
+                item.put("moodTagsScanned", song.moodTagsScanned);
                 array.put(item);
             } catch (JSONException error) {
                 Log.w(TAG, "Could not cache one music item", error);
@@ -479,8 +502,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 MediaStore.Audio.Media.IS_MUSIC
         };
         try {
+            String selection = MediaStore.Audio.Media.IS_MUSIC + "=1 AND "
+                    + MediaStore.Audio.Media.DATA + " NOT LIKE ? AND "
+                    + MediaStore.Audio.Media.DATA + " NOT LIKE ?";
+            String[] selectionArgs = new String[]{"%/.%/%", "%/.%"};
             cursor = getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                    projection, MediaStore.Audio.Media.IS_MUSIC + "=1", null, null);
+                    projection, selection, selectionArgs, null);
             if (cursor != null) {
                 int idCol = cursor.getColumnIndex(MediaStore.Audio.Media._ID);
                 int titleCol = cursor.getColumnIndex(MediaStore.Audio.Media.TITLE);
@@ -506,6 +533,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         song.dateAdded = dateCol >= 0 ? cursor.getLong(dateCol) : 0;
                         song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
                         song.albumArtPath = artworkByAlbum.get(song.albumId);
+                        readMoodTags(song);
                         songs.add(song);
                     }
                 }
@@ -521,25 +549,53 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         return songs;
     }
 
-    /** Directory checks are memoized so every track does not repeat .nomedia disk I/O. */
+    /** Reject files whose own name or any ancestor directory begins with a dot. */
     private boolean isVisibleAudioPath(String path, Map<String, Boolean> directoryCache) {
-        if (path == null || path.length() == 0) return false;
-        String normalized = path.replace('\\', '/');
+        if (path == null || path.trim().length() == 0) return false;
+        String normalized = path.trim().replace('\\', '/');
+        if (normalized.regionMatches(true, 0, "file://", 0, 7)) {
+            try { normalized = Uri.decode(Uri.parse(normalized).getPath()); }
+            catch (Exception ignored) { }
+        } else {
+            try { normalized = Uri.decode(normalized); } catch (Exception ignored) { }
+        }
+        normalized = normalized.replace('\\', '/');
         String lower = normalized.toLowerCase(Locale.US);
         if (lower.contains("/android/data/") || lower.contains("/android/obb/") || lower.contains("/lost.dir/")) return false;
-        for (String part : normalized.split("/")) if (part.length() > 1 && part.charAt(0) == '.') return false;
-        File parent = new File(path).getParentFile();
-        while (parent != null) {
-            String key = parent.getAbsolutePath();
-            Boolean visible = directoryCache.get(key);
-            if (visible == null) {
-                visible = !parent.getName().startsWith(".") && !new File(parent, ".nomedia").exists();
-                directoryCache.put(key, visible);
+        if (hasDotPrefixedPathComponent(normalized)) return false;
+        File file = new File(normalized);
+        try {
+            String canonical = file.getCanonicalPath();
+            if (hasDotPrefixedPathComponent(canonical)) return false;
+            file = new File(canonical);
+        } catch (IOException ignored) {
+            file = file.getAbsoluteFile();
+        }
+        File current = file;
+        boolean isFile = true;
+        while (current != null) {
+            String name = current.getName();
+            if (name != null && name.length() > 1 && name.charAt(0) == '.') return false;
+            if (!isFile) {
+                String key = current.getAbsolutePath();
+                Boolean visible = directoryCache == null ? null : directoryCache.get(key);
+                if (visible == null) {
+                    visible = !new File(current, ".nomedia").exists();
+                    if (directoryCache != null) directoryCache.put(key, visible);
+                }
+                if (!visible.booleanValue()) return false;
             }
-            if (!visible.booleanValue()) return false;
-            parent = parent.getParentFile();
+            isFile = false;
+            current = current.getParentFile();
         }
         return true;
+    }
+
+    private boolean hasDotPrefixedPathComponent(String path) {
+        if (path == null) return false;
+        String[] parts = path.replace('\\', '/').split("/");
+        for (String part : parts) if (part.length() > 1 && part.charAt(0) == '.') return true;
+        return false;
     }
 
     private void reconcileLibrary(ArrayList<Song> loadedSongs) {
@@ -547,6 +603,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         for (Song song : loadedSongs) byId.put(song.id, song);
         Song oldCurrent = currentSong;
         allSongs.clear(); allSongs.addAll(loadedSongs);
+        moodMixIndex = buildMoodMixIndex(allSongs);
         libraryRevision++;
         tabLoadToken++;
         browserEntriesCache.clear();
@@ -2469,6 +2526,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         String path;
         String albumArtPath;
         String albumArtist;
+        String key;
+        int bpm;
+        boolean moodTagsScanned;
         Uri uri;
     }
 
