@@ -635,6 +635,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         } catch (IOException ignored) {
             file = file.getAbsoluteFile();
         }
+        // MediaStore can retain stale rows after files are moved or removed.
+        // A visible library entry must still resolve to a real local audio file.
+        if (!file.isFile()) return false;
         File current = file;
         boolean isFile = true;
         while (current != null) {
@@ -2581,6 +2584,34 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (miniSubtitle != null) miniSubtitle.setText(currentSong == null ? "" : currentSong.artist);
     }
 
+    private void setSongDataSource(MediaPlayer target, Song song) throws Exception {
+        if (target == null || song == null) throw new IOException("Missing audio player or song");
+        if (song.path != null && song.path.trim().length() > 0) {
+            File audioFile = new File(song.path);
+            if (audioFile.isFile()) {
+                try {
+                    // Android 4.4 handles a direct filesystem path more reliably
+                    // on some OEM MediaStore providers than a generated content URI.
+                    target.setDataSource(audioFile.getAbsolutePath());
+                    return;
+                } catch (Exception pathError) {
+                    Log.w(TAG, "Direct audio path failed; retrying MediaStore URI for " + song.path, pathError);
+                    try { target.reset(); } catch (Exception ignored) { }
+                    if (song.uri == null) throw pathError;
+                }
+            }
+        }
+        if (song.uri != null) {
+            target.setDataSource(this, song.uri);
+            return;
+        }
+        if (song.path != null && song.path.trim().length() > 0) {
+            target.setDataSource(song.path);
+            return;
+        }
+        throw new IOException("Song has no valid audio path or MediaStore URI");
+    }
+
     private void startTrack(ArrayList<Song> songs, int index) {
         startTrack(songs, index, false);
     }
@@ -2605,13 +2636,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             newPlayer.setOnPreparedListener(this);
             newPlayer.setOnCompletionListener(this);
             newPlayer.setOnErrorListener(this);
-            if (currentSong.uri != null) {
-                newPlayer.setDataSource(this, currentSong.uri);
-            } else if (currentSong.path != null) {
-                newPlayer.setDataSource(currentSong.path);
-            } else {
-                throw new java.io.IOException("Missing audio file location");
-            }
+            setSongDataSource(newPlayer, currentSong);
             player = newPlayer;
         } catch (Exception error) {
             Log.e(TAG, "Could not set audio source for track " + currentSong.id, error);
@@ -2723,9 +2748,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             });
             preload.setOnCompletionListener(this);
             preload.setOnErrorListener(this);
-            if (song.uri != null) preload.setDataSource(this, song.uri);
-            else if (song.path != null) preload.setDataSource(song.path);
-            else throw new java.io.IOException("Missing next-track location");
+            setSongDataSource(preload, song);
             preload.prepareAsync();
         } catch (Exception error) {
             Log.w(TAG, "Could not preload next track for crossfade", error);
