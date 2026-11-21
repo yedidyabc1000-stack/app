@@ -395,6 +395,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 if (song.key.length() == 0) song.key = null;
                 song.bpm = item.optInt("bpm", 0);
                 song.moodTagsScanned = item.optBoolean("moodTagsScanned", false);
+                song.moodTagReaderVersion = item.optInt("moodTagReaderVersion", 0);
                 song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
                 songs.add(song);
             }
@@ -425,6 +426,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 item.put("musicKey", song.key == null ? "" : song.key);
                 item.put("bpm", song.bpm);
                 item.put("moodTagsScanned", song.moodTagsScanned);
+                item.put("moodTagReaderVersion", song.moodTagReaderVersion);
                 array.put(item);
             } catch (JSONException error) {
                 Log.w(TAG, "Could not cache one music item", error);
@@ -659,7 +661,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
         float screenHeightDp = metrics.heightPixels / metrics.density;
-        boolean compact = screenHeightDp < 520f;
+        boolean compact = screenHeightDp < 600f;
         int compactRowHeight = Math.max(48, Math.min(60, (int) ((screenHeightDp - 130f) / 6f)));
         int pagePadding = compact ? 6 : 12;
         LinearLayout page = new LinearLayout(this);
@@ -1951,6 +1953,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         song.key = data.key;
         song.bpm = data.bpm;
         song.moodTagsScanned = true;
+        song.moodTagReaderVersion = MOOD_TAG_READER_VERSION;
     }
 
     private MoodTagData readMoodTags(String path) {
@@ -2195,7 +2198,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int parseBpm(String rawValue) {
         if (rawValue == null) return 0;
         String value = rawValue.trim().replace(',', '.');
-        value = value.replaceAll("(?i)\\\\s*(bpm|beats per minute)\\\\s*", "").trim();
+        value = value.replaceAll("(?i)\\s*(bpm|beats per minute)\\s*", "").trim();
         int separator = value.indexOf(';');
         if (separator >= 0) value = value.substring(0, separator).trim();
         try {
@@ -2207,7 +2210,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private void scanMissingMoodTagsAsync() {
         final ArrayList<Song> snapshot = new ArrayList<Song>();
-        for (Song song : allSongs) if (!song.moodTagsScanned) snapshot.add(song);
+        for (Song song : allSongs) if (song.moodTagReaderVersion < MOOD_TAG_READER_VERSION) snapshot.add(song);
         if (snapshot.size() == 0) {
             moodMixIndex = buildMoodMixIndex(allSongs);
             return;
@@ -2230,6 +2233,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                             current.key = item.getValue().key;
                             current.bpm = item.getValue().bpm;
                             current.moodTagsScanned = true;
+                            current.moodTagReaderVersion = MOOD_TAG_READER_VERSION;
                         }
                         moodTagScanRunning = false;
                         moodMixIndex = buildMoodMixIndex(allSongs);
@@ -2916,6 +2920,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         String key;
         int bpm;
         boolean moodTagsScanned;
+        int moodTagReaderVersion;
         Uri uri;
     }
 
