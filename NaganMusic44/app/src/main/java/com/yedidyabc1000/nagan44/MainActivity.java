@@ -2182,7 +2182,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         try {
             retriever.setDataSource(file.getAbsolutePath());
             return normalizeGenre(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE));
-        } catch (RuntimeException error) {
+        } catch (Exception error) {
             Log.d(TAG, "Embedded genre metadata unavailable for " + file, error);
             return null;
         } finally {
