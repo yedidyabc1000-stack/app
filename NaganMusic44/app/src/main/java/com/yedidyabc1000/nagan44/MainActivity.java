@@ -91,16 +91,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_DARK = 0xff252525;
     private static final int COLOR_BAR = 0xff383838;
     private static final int COLOR_ACCENT = 0xff00b9cc;
-    private static final int COLOR_BG = 0xffeeeeee;
-    private static final int COLOR_ROW = 0xffffffff;
+    private static final int COLOR_BG = 0xffe3e6e9;
+    private static final int COLOR_ROW = 0xfff0f2f4;
     private static final int COLOR_TEXT = 0xff202020;
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
     private static final String LIBRARY_CACHE_KEY = "library_cache_v1";
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
-    private static final int COLOR_FOCUS = 0xffd6f0f2;
-    private static final int COLOR_FOCUS_PRESSED = 0xffb6e4e8;
+    private static final int COLOR_FOCUS = 0xffc9e5e8;
+    private static final int COLOR_FOCUS_PRESSED = 0xffafd4d9;
 
     private final ArrayList<Song> allSongs = new ArrayList<Song>();
     private final ArrayList<Song> queue = new ArrayList<Song>();
@@ -162,11 +162,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private boolean playerPrepared = false;
     private final Runnable heldSeekRunnable = new Runnable() {
         @Override public void run() {
-            if (seekDirection == 0 || !playerPrepared || player == null) return;
+            if (seekDirection == 0 || player == null) return;
             heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
-                    heldSeekPosition + seekDirection * 1000));
+                    heldSeekPosition + seekDirection * 1200));
             seekToAbsolute(heldSeekPosition);
-            handler.postDelayed(this, 240L);
+            if (seekDirection != 0) handler.postDelayed(this, 220L);
         }
     };
     private ContentObserver mediaObserver;
@@ -595,7 +595,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setVerticalScrollBarEnabled(true);
+        scroll.setScrollbarFadingEnabled(true);
+        scroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(18), dp(22), dp(18), dp(24));
@@ -615,13 +617,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         renderNowPlaying();
                     }
                 });
-        addHomeRow(page, "שירים", "כל השירים שבמכשיר", allSongs.size() + " שירים", "≡", false,
+        addHomeRow(page, "שירים", "", allSongs.size() + " שירים", "≡", false,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_SONGS, "שירים"); } });
-        addHomeRow(page, "אמנים", "עיון לפי אמן", artistIndex().size() + " אמנים", "♬", false,
+        addHomeRow(page, "אמנים", "", artistIndex().size() + " אמנים", "♬", false,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ARTISTS, "אמנים"); } });
-        addHomeRow(page, "אלבומים", "עיון לפי אלבום", albumGroups(allSongs).size() + " אלבומים", "▤", false,
+        addHomeRow(page, "אלבומים", "", albumGroups(allSongs).size() + " אלבומים", "▤", false,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
-        addHomeRow(page, "פלייליסטים", "רשימות ההשמעה שלך והמושמעים ביותר", customPlaylists.size() + " רשימות אישיות", "☷", false,
+        addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☷", false,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_PLAYLISTS, "פלייליסטים"); } });
 
         scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
@@ -636,14 +638,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         card.setPadding(dp(14), dp(10), dp(14), dp(10));
-        card.setBackgroundDrawable(roundRect(featured ? 0xffe0f5f6 : 0xffffffff, 13));
+        card.setBackgroundDrawable(roundRect(featured ? 0xffd5eaec : COLOR_ROW, 13));
         card.setFocusable(true);
         card.setClickable(true);
 
         TextView icon = text(symbol, featured ? 28 : 25,
                 featured ? 0xff007f8c : 0xff52616a, true);
         icon.setGravity(Gravity.CENTER);
-        icon.setBackgroundDrawable(roundRect(featured ? 0xffb8e8eb : 0xffedf1f3, 12));
+        icon.setBackgroundDrawable(roundRect(featured ? 0xffb2dadd : 0xffe1e6e9, 12));
         card.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
         LinearLayout labels = new LinearLayout(this);
@@ -659,7 +661,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         TextView count = text(detail, 11, COLOR_SUB, false);
         count.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         labels.addView(name, new LinearLayout.LayoutParams(-1, -2));
-        labels.addView(description, new LinearLayout.LayoutParams(-1, dp(21)));
+        if (subtitle != null && subtitle.length() > 0) {
+            labels.addView(description, new LinearLayout.LayoutParams(-1, dp(21)));
+        }
         labels.addView(count, new LinearLayout.LayoutParams(-1, dp(17)));
         card.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
 
@@ -1312,7 +1316,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setGravity(Gravity.CENTER_HORIZONTAL);
-        content.setPadding(dp(12), dp(18), dp(12), 0);
+        content.setPadding(dp(20), dp(20), dp(20), 0);
 
         FrameLayout artHolder = new FrameLayout(this);
         nowArt = new RoundImageView(this);
@@ -1320,9 +1324,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArt.setBackgroundDrawable(roundRect(0xffe5e8eb, 15));
         nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.68f);
-        artParams.topMargin = dp(8);
-        artParams.bottomMargin = dp(2);
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.84f);
+        artParams.topMargin = dp(10);
+        artParams.bottomMargin = dp(3);
         content.addView(artHolder, artParams);
 
         nowTitle = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 17, COLOR_TEXT, true);
@@ -1335,7 +1339,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowAlbum = text(currentSong == null ? "" : currentSong.album, 12, COLOR_SUB, false);
         nowAlbum.setGravity(Gravity.CENTER);
         content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, dp(14)));
-        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.32f));
+        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.10f));
 
         LinearLayout timeline = new LinearLayout(this);
         timeline.setOrientation(LinearLayout.VERTICAL);
@@ -1450,28 +1454,31 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void beginContinuousSeek(int direction) {
-        if (player == null || !playerPrepared) return;
+        if (player == null) return;
         try {
-            heldSeekDuration = player.getDuration();
-            heldSeekPosition = player.getCurrentPosition();
-            if (heldSeekDuration <= 0) return;
+            int duration = player.getDuration();
+            int position = player.getCurrentPosition();
+            if (duration <= 0) return;
+            heldSeekDuration = duration;
+            heldSeekPosition = position;
             seekDirection = direction;
             heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
-                    heldSeekPosition + direction * 1400));
+                    heldSeekPosition + direction * 1800));
             seekToAbsolute(heldSeekPosition);
             handler.removeCallbacks(heldSeekRunnable);
-            handler.postDelayed(heldSeekRunnable, 240L);
+            handler.postDelayed(heldSeekRunnable, 220L);
         } catch (IllegalStateException ignored) {
             seekDirection = 0;
         }
     }
 
     private void seekToAbsolute(int requestedPosition) {
-        if (player == null || !playerPrepared) return;
+        if (player == null) return;
         try {
             int duration = heldSeekDuration > 0 ? heldSeekDuration : player.getDuration();
             int target = Math.max(0, Math.min(duration, requestedPosition));
-            player.seekTo(target);
+            if (Build.VERSION.SDK_INT >= 26) player.seekTo((long) target, MediaPlayer.SEEK_CLOSEST);
+            else player.seekTo(target);
             if (seekBar != null) seekBar.setProgress(target);
             if (elapsedText != null) elapsedText.setText(formatTime(target));
         } catch (IllegalStateException ignored) { }
@@ -2157,6 +2164,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() {
                 if (!fingerDown || holdDirection == 0) return;
                 longSeeking = true;
+                seekDirection = holdDirection;
                 handler.removeCallbacks(heldSeekRunnable);
                 beginContinuousSeek(holdDirection);
             }
@@ -2193,7 +2201,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     seekDirection = 0;
                     heldSeekPosition = 0;
                     heldSeekDuration = 0;
-                    handler.postDelayed(startSeek, 450L);
+                    handler.postDelayed(startSeek, 350L);
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     if (event.getX() < -dp(14) || event.getX() > getWidth() + dp(14)
@@ -2207,6 +2215,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     handler.removeCallbacks(startSeek);
                     setPressed(false);
                     if (longSeeking) {
+                        handler.removeCallbacks(startSeek);
                         seekDirection = 0;
                         heldSeekPosition = 0;
                         heldSeekDuration = 0;
@@ -2227,6 +2236,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             fingerDown = false;
             longSeeking = false;
             handler.removeCallbacks(startSeek);
+            longSeeking = false;
             seekDirection = 0;
             heldSeekPosition = 0;
             heldSeekDuration = 0;
@@ -2243,7 +2253,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             super.onDraw(canvas);
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            float unit = Math.min(getWidth(), getHeight()) * (type == TYPE_PLAY ? 0.58f : 0.44f);
+            float unit = Math.min(getWidth(), getHeight()) * (type == TYPE_PLAY ? 0.66f : 0.36f);
             iconPaint.setColor(type == TYPE_PLAY ? 0xffffffff : 0xff34434a);
             iconPaint.setStyle(Paint.Style.FILL);
             iconPaint.setStrokeWidth(dp(2.1f));
