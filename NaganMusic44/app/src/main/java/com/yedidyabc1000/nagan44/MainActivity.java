@@ -1945,6 +1945,307 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         updateMiniPlayerText();
     }
 
+    private void readMoodTags(Song song) {
+        if (song == null) return;
+        MoodTagData data = readMoodTags(song.path);
+        song.key = data.key;
+        song.bpm = data.bpm;
+        song.moodTagsScanned = true;
+    }
+
+    private MoodTagData readMoodTags(String path) {
+        MoodTagData result = new MoodTagData();
+        if (path == null || path.length() == 0) return result;
+        File file = new File(path);
+        if (!file.isFile()) return result;
+        String name = path.toLowerCase(Locale.US);
+        try {
+            // ID3 TKEY/TBPM are used by MP3 and some WAV/AIFF files.
+            readId3MoodTags(file, result);
+            if (name.endsWith(".flac")) readFlacMoodTags(file, result);
+            else if (name.endsWith(".ogg") || name.endsWith(".oga") || name.endsWith(".opus")) {
+                readOggMoodTags(file, result);
+            }
+        } catch (Exception error) {
+            Log.d(TAG, "Could not read mood tags from " + path, error);
+        }
+        return result;
+    }
+
+    private void readId3MoodTags(File file, MoodTagData result) {
+        RandomAccessFile input = null;
+        try {
+            input = new RandomAccessFile(file, "r");
+            if (input.length() < 10) return;
+            byte[] header = new byte[10];
+            input.readFully(header);
+            if (header[0] != 'I' || header[1] != 'D' || header[2] != '3') return;
+            int version = header[3] & 255;
+            if (version < 2 || version > 4) return;
+            int flags = header[5] & 255;
+            int tagSize = syncSafeInt(header, 6);
+            if (tagSize <= 0) return;
+            long tagEnd = Math.min(input.length(), 10L + tagSize);
+            input.seek(10L);
+
+            // Skip an extended header if present.
+            if ((flags & 0x40) != 0 && version >= 3 && input.getFilePointer() + 4 <= tagEnd) {
+                byte[] extSizeBytes = new byte[4];
+                input.readFully(extSizeBytes);
+                int extSize = version == 4 ? syncSafeInt(extSizeBytes, 0)
+                        : bigEndianInt(extSizeBytes, 0);
+                long target = version == 4 ? 10L + extSize : 14L + extSize;
+                if (target > input.getFilePointer() && target <= tagEnd) input.seek(target);
+            }
+
+            int headerLength = version == 2 ? 6 : 10;
+            while (input.getFilePointer() + headerLength <= tagEnd) {
+                byte[] frameHeader = new byte[headerLength];
+                input.readFully(frameHeader);
+                int idLength = version == 2 ? 3 : 4;
+                boolean empty = true;
+                for (int i = 0; i < idLength; i++) if (frameHeader[i] != 0) empty = false;
+                if (empty) break;
+                String frameId = new String(frameHeader, 0, idLength, "ISO-8859-1");
+                int frameSize;
+                if (version == 2) {
+                    frameSize = ((frameHeader[3] & 255) << 16)
+                            | ((frameHeader[4] & 255) << 8) | (frameHeader[5] & 255);
+                } else if (version == 4) {
+                    frameSize = syncSafeInt(frameHeader, 4);
+                } else {
+                    frameSize = bigEndianInt(frameHeader, 4);
+                }
+                if (frameSize <= 0) break;
+                long nextFrame = input.getFilePointer() + frameSize;
+                if (nextFrame > tagEnd || nextFrame > input.length()) break;
+
+                boolean keyFrame = "TKEY".equals(frameId) || "TKE".equals(frameId);
+                boolean bpmFrame = "TBPM".equals(frameId) || "TBP".equals(frameId);
+                if ((keyFrame || bpmFrame) && frameSize <= 4096) {
+                    byte[] body = new byte[frameSize];
+                    input.readFully(body);
+                    String value = decodeId3Text(body);
+                    if (keyFrame && result.key == null) result.key = value;
+                    if (bpmFrame && result.bpm <= 0) result.bpm = parseBpm(value);
+                }
+                input.seek(nextFrame);
+                if (result.key != null && result.bpm > 0) break;
+            }
+        } catch (Exception error) {
+            Log.d(TAG, "ID3 mood tag read skipped for " + file, error);
+        } finally {
+            if (input != null) try { input.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private int syncSafeInt(byte[] data, int offset) {
+        if (data == null || offset < 0 || offset + 4 > data.length) return 0;
+        return ((data[offset] & 127) << 21) | ((data[offset + 1] & 127) << 14)
+                | ((data[offset + 2] & 127) << 7) | (data[offset + 3] & 127);
+    }
+
+    private int bigEndianInt(byte[] data, int offset) {
+        if (data == null || offset < 0 || offset + 4 > data.length) return 0;
+        return ((data[offset] & 255) << 24) | ((data[offset + 1] & 255) << 16)
+                | ((data[offset + 2] & 255) << 8) | (data[offset + 3] & 255);
+    }
+
+    private String decodeId3Text(byte[] body) {
+        if (body == null || body.length < 2) return null;
+        int encoding = body[0] & 255;
+        String charset;
+        if (encoding == 1) charset = "UTF-16";
+        else if (encoding == 2) charset = "UTF-16BE";
+        else if (encoding == 3) charset = "UTF-8";
+        else charset = "ISO-8859-1";
+        try {
+            String value = new String(body, 1, body.length - 1, charset)
+                    .replace("\u0000", "").trim();
+            return value.length() == 0 ? null : value;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void readFlacMoodTags(File file, MoodTagData result) {
+        RandomAccessFile input = null;
+        try {
+            input = new RandomAccessFile(file, "r");
+            if (input.length() < 8) return;
+            byte[] signature = new byte[4];
+            input.readFully(signature);
+            if (signature[0] != 'f' || signature[1] != 'L'
+                    || signature[2] != 'a' || signature[3] != 'C') return;
+            boolean lastBlock = false;
+            while (!lastBlock && input.getFilePointer() + 4 <= input.length()) {
+                int blockHeader = input.readUnsignedByte();
+                lastBlock = (blockHeader & 128) != 0;
+                int blockType = blockHeader & 127;
+                int blockSize = (input.readUnsignedByte() << 16)
+                        | (input.readUnsignedByte() << 8) | input.readUnsignedByte();
+                long next = input.getFilePointer() + blockSize;
+                if (next > input.length()) break;
+                if (blockType == 4 && blockSize > 0 && blockSize <= 4 * 1024 * 1024) {
+                    byte[] comments = new byte[blockSize];
+                    input.readFully(comments);
+                    parseVorbisComments(comments, 0, result);
+                    if (result.key != null && result.bpm > 0) return;
+                } else {
+                    input.seek(next);
+                }
+            }
+        } catch (Exception error) {
+            Log.d(TAG, "FLAC mood tag read skipped for " + file, error);
+        } finally {
+            if (input != null) try { input.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private void readOggMoodTags(File file, MoodTagData result) {
+        RandomAccessFile input = null;
+        ByteArrayOutputStream packet = new ByteArrayOutputStream();
+        try {
+            input = new RandomAccessFile(file, "r");
+            long readLimit = Math.min(input.length(), 8L * 1024L * 1024L);
+            while (input.getFilePointer() + 27 <= readLimit) {
+                byte[] pageHeader = new byte[27];
+                input.readFully(pageHeader);
+                if (pageHeader[0] != 'O' || pageHeader[1] != 'g'
+                        || pageHeader[2] != 'g' || pageHeader[3] != 'S') break;
+                int segmentCount = pageHeader[26] & 255;
+                if (input.getFilePointer() + segmentCount > readLimit) break;
+                byte[] lacing = new byte[segmentCount];
+                input.readFully(lacing);
+                for (int i = 0; i < lacing.length; i++) {
+                    int length = lacing[i] & 255;
+                    if (input.getFilePointer() + length > readLimit) return;
+                    byte[] part = new byte[length];
+                    input.readFully(part);
+                    packet.write(part, 0, part.length);
+                    if (length < 255) {
+                        byte[] completed = packet.toByteArray();
+                        int offset = -1;
+                        if (startsWith(completed, new byte[]{3, 'v', 'o', 'r', 'b', 'i', 's'})) offset = 7;
+                        else if (startsWith(completed, new byte[]{'O', 'p', 'u', 's', 'T', 'a', 'g', 's'})) offset = 8;
+                        if (offset >= 0) {
+                            parseVorbisComments(completed, offset, result);
+                            if (result.key != null || result.bpm > 0) return;
+                        }
+                        packet.reset();
+                    }
+                }
+            }
+        } catch (Exception error) {
+            Log.d(TAG, "Ogg/Opus mood tag read skipped for " + file, error);
+        } finally {
+            if (input != null) try { input.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private boolean startsWith(byte[] data, byte[] prefix) {
+        if (data == null || prefix == null || data.length < prefix.length) return false;
+        for (int i = 0; i < prefix.length; i++) if (data[i] != prefix[i]) return false;
+        return true;
+    }
+
+    private void parseVorbisComments(byte[] data, int offset, MoodTagData result) {
+        if (data == null || result == null || offset < 0 || offset + 8 > data.length) return;
+        int position = offset;
+        long vendorLength = littleEndianInt(data, position);
+        position += 4;
+        if (vendorLength < 0 || vendorLength > data.length - position) return;
+        position += (int) vendorLength;
+        if (position + 4 > data.length) return;
+        long commentCount = littleEndianInt(data, position);
+        position += 4;
+        if (commentCount < 0 || commentCount > 10000) return;
+        for (int i = 0; i < (int) commentCount && position + 4 <= data.length; i++) {
+            long length = littleEndianInt(data, position);
+            position += 4;
+            if (length < 0 || length > data.length - position) return;
+            String comment = new String(data, position, (int) length, "UTF-8");
+            position += (int) length;
+            int equals = comment.indexOf('=');
+            if (equals <= 0 || equals >= comment.length() - 1) continue;
+            applyMoodComment(comment.substring(0, equals), comment.substring(equals + 1), result);
+        }
+    }
+
+    private long littleEndianInt(byte[] data, int offset) {
+        if (data == null || offset < 0 || offset + 4 > data.length) return -1;
+        return (data[offset] & 255L) | ((data[offset + 1] & 255L) << 8)
+                | ((data[offset + 2] & 255L) << 16) | ((data[offset + 3] & 255L) << 24);
+    }
+
+    private void applyMoodComment(String rawName, String rawValue, MoodTagData result) {
+        if (rawName == null || rawValue == null) return;
+        String name = rawName.trim().toUpperCase(Locale.US);
+        String value = rawValue.trim();
+        if (value.length() == 0) return;
+        if ("BPM".equals(name) || "TBPM".equals(name) || "TEMPO".equals(name)) {
+            int bpm = parseBpm(value);
+            if (bpm > 0) result.bpm = bpm;
+        } else if ("TKEY".equals(name) || "KEY".equals(name)
+                || "INITIALKEY".equals(name) || "INITIAL_KEY".equals(name)) {
+            result.key = value;
+        }
+    }
+
+    private int parseBpm(String rawValue) {
+        if (rawValue == null) return 0;
+        String value = rawValue.trim().replace(',', '.');
+        value = value.replaceAll("(?i)\\\\s*(bpm|beats per minute)\\\\s*", "").trim();
+        int separator = value.indexOf(';');
+        if (separator >= 0) value = value.substring(0, separator).trim();
+        try {
+            double parsed = Double.parseDouble(value);
+            if (parsed >= 30.0 && parsed <= 300.0) return (int) Math.round(parsed);
+        } catch (NumberFormatException ignored) { }
+        return 0;
+    }
+
+    private void scanMissingMoodTagsAsync() {
+        final ArrayList<Song> snapshot = new ArrayList<Song>();
+        for (Song song : allSongs) if (!song.moodTagsScanned) snapshot.add(song);
+        if (snapshot.size() == 0) {
+            moodMixIndex = buildMoodMixIndex(allSongs);
+            return;
+        }
+        final int token = ++moodTagScanToken;
+        final int revision = libraryRevision;
+        moodTagScanRunning = true;
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                final HashMap<Long, MoodTagData> found = new HashMap<Long, MoodTagData>();
+                for (Song song : snapshot) found.put(song.id, readMoodTags(song.path));
+                handler.post(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing() || token != moodTagScanToken || revision != libraryRevision) return;
+                        HashMap<Long, Song> byId = new HashMap<Long, Song>();
+                        for (Song song : allSongs) byId.put(song.id, song);
+                        for (Map.Entry<Long, MoodTagData> item : found.entrySet()) {
+                            Song current = byId.get(item.getKey());
+                            if (current == null) continue;
+                            current.key = item.getValue().key;
+                            current.bpm = item.getValue().bpm;
+                            current.moodTagsScanned = true;
+                        }
+                        moodTagScanRunning = false;
+                        moodMixIndex = buildMoodMixIndex(allSongs);
+                        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                                .putString(LIBRARY_CACHE_KEY, serializeLibraryCache(allSongs)).apply();
+                        browserEntriesCache.remove(TAB_MIXES);
+                        if (activeTab == TAB_MIXES && detailLevel == 0) renderBrowser();
+                        Toast.makeText(MainActivity.this, "סריקת תגיות המוזיקה הושלמה", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }, "nagan-mood-tag-scan");
+        worker.setPriority(Thread.MIN_PRIORITY);
+        worker.start();
+    }
+
     private void updateMiniPlayerText() {
         if (miniTitle != null) miniTitle.setText(currentSong == null ? "לא מתנגן שיר" : currentSong.title);
         if (miniSubtitle != null) miniSubtitle.setText(currentSong == null ? "" : currentSong.artist);
@@ -2577,6 +2878,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             super.onDraw(canvas);
             canvas.restoreToCount(save);
         }
+    }
+
+    private static class MoodTagData {
+        String key;
+        int bpm;
     }
 
     private static class PlaylistImportResult {
