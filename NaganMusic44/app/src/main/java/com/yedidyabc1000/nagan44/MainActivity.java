@@ -1057,12 +1057,32 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (rawKey == null) return -1;
         String value = rawKey.trim().toLowerCase(Locale.US).replace(" ", "");
         if (value.length() == 0) return -1;
-        if (value.matches("^(1[0-2]|[1-9])a$") || value.matches("^(1[0-2]|[1-9])m$")) return 1;
-        if (value.matches("^(1[0-2]|[1-9])b$") || value.matches("^(1[0-2]|[1-9])d$")) return 0;
-        if (value.contains("minor") || value.endsWith("min") || value.matches("^[a-g](#|b)?m$")) return 1;
+        if (value.contains("minor") || value.endsWith("min")) return 1;
         if (value.contains("major") || value.endsWith("maj")) return 0;
-        if (value.matches("^[a-g](#|b)?$")) return 0;
-        return -1;
+
+        char suffix = value.charAt(value.length() - 1);
+        if (suffix == 'a' || suffix == 'b' || suffix == 'm' || suffix == 'd') {
+            String number = value.substring(0, value.length() - 1);
+            try {
+                int circleNumber = Integer.parseInt(number);
+                if (circleNumber >= 1 && circleNumber <= 12) {
+                    return (suffix == 'a' || suffix == 'm') ? 1 : 0;
+                }
+            } catch (NumberFormatException ignored) { }
+        }
+
+        if (suffix == 'm' && value.length() >= 2) {
+            String note = value.substring(0, value.length() - 1);
+            if (isMusicNote(note)) return 1;
+        }
+        return isMusicNote(value) ? 0 : -1;
+    }
+
+    private boolean isMusicNote(String value) {
+        if (value == null || value.length() < 1 || value.length() > 2) return false;
+        char note = value.charAt(0);
+        if (note < 'a' || note > 'g') return false;
+        return value.length() == 1 || value.charAt(1) == '#' || value.charAt(1) == 'b';
     }
 
     private void openMoodMix(int moodId) {
@@ -2221,9 +2241,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void scanMissingMoodTagsAsync() {
-        final ArrayList<Song> snapshot = new ArrayList<Song>();
-        for (Song song : allSongs) if (song.moodTagReaderVersion < MOOD_TAG_READER_VERSION) snapshot.add(song);
-        if (snapshot.size() == 0) {
+        final ArrayList<Song> librarySnapshot = new ArrayList<Song>(allSongs);
+        final ArrayList<Song> toScan = new ArrayList<Song>();
+        for (Song song : librarySnapshot) if (song.moodTagReaderVersion < MOOD_TAG_READER_VERSION) toScan.add(song);
+        if (toScan.size() == 0) {
             moodMixIndex = buildMoodMixIndex(allSongs);
             return;
         }
@@ -2233,7 +2254,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         Thread worker = new Thread(new Runnable() {
             @Override public void run() {
                 final HashMap<Long, MoodTagData> found = new HashMap<Long, MoodTagData>();
-                for (Song song : snapshot) found.put(song.id, readMoodTags(song.path));
+                for (Song song : toScan) found.put(song.id, readMoodTags(song.path));
+                // Serialize a detached snapshot here, not on the UI thread.
+                final String updatedCache = serializeMoodTagCache(librarySnapshot, found);
                 handler.post(new Runnable() {
                     @Override public void run() {
                         if (isFinishing() || token != moodTagScanToken || revision != libraryRevision) return;
@@ -2250,7 +2273,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         moodTagScanRunning = false;
                         moodMixIndex = buildMoodMixIndex(allSongs);
                         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                                .putString(LIBRARY_CACHE_KEY, serializeLibraryCache(allSongs)).apply();
+                                .putString(LIBRARY_CACHE_KEY, updatedCache).apply();
                         browserEntriesCache.remove(TAB_MIXES);
                         if (activeTab == TAB_MIXES && detailLevel == 0) {
                             renderBrowser();
@@ -2266,6 +2289,36 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }, "nagan-mood-tag-scan");
         worker.setPriority(Thread.MIN_PRIORITY);
         worker.start();
+    }
+
+    private String serializeMoodTagCache(List<Song> songs, Map<Long, MoodTagData> updates) {
+        ArrayList<Song> detached = new ArrayList<Song>(songs.size());
+        for (Song source : songs) {
+            Song copy = new Song();
+            copy.id = source.id;
+            copy.albumId = source.albumId;
+            copy.duration = source.duration;
+            copy.dateAdded = source.dateAdded;
+            copy.title = source.title;
+            copy.artist = source.artist;
+            copy.album = source.album;
+            copy.path = source.path;
+            copy.albumArtPath = source.albumArtPath;
+            copy.albumArtist = source.albumArtist;
+            copy.key = source.key;
+            copy.bpm = source.bpm;
+            copy.moodTagsScanned = source.moodTagsScanned;
+            copy.moodTagReaderVersion = source.moodTagReaderVersion;
+            MoodTagData data = updates.get(source.id);
+            if (data != null) {
+                copy.key = data.key;
+                copy.bpm = data.bpm;
+                copy.moodTagsScanned = true;
+                copy.moodTagReaderVersion = MOOD_TAG_READER_VERSION;
+            }
+            detached.add(copy);
+        }
+        return serializeLibraryCache(detached);
     }
 
     private void updateMiniPlayerText() {
