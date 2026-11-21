@@ -70,14 +70,15 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.1.6
+          tag_name: v2.1.7
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.1.6
+          name: נגן Android 4.4 – v2.1.7
           body: |
-            גרסה 2.1.6 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
-            נוספו רווחים נוחים מעל תמונת העטיפה ובין פס ההתקדמות לתצוגת הזמנים.
-            לחיצה קצרה על חיצי המעבר מחליפה שיר; לחיצה ארוכה מבצעת הרצה קדימה או אחורה בלי לדלג בין שירים.
-            כפתורי הניגון, ההשהיה והמעבר עוצבו מחדש בסגנון נקי וחד.
+            גרסה 2.1.7 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
+            מסך הבית מציג רשימה אנכית: מתנגן עכשיו, שירים, אמנים, אלבומים ופלייליסטים; סרגל הלשוניות הוסר.
+            מנגנון ההרצה בלחיצה ארוכה הועבר לטיפול מגע ישיר בכפתורים.
+            פס ההתקדמות קיבל מסילה צבעונית ומילוי שמציג בבירור את החלק שכבר הושמע.
+            כפתור ההפעלה עוצב מחדש והחיצים הוקטנו.
           files: |
             releases/NaganMusic44-Android44.apk
             releases/NaganMusic44-source.zip
@@ -89,7 +90,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.1.6-debug-apk
+          name: nagan-android44-2.1.7-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
