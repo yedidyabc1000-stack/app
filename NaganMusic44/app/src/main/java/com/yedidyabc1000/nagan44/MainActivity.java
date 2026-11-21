@@ -113,7 +113,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_TEXT = 0xff202020;
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
-    private static final String LIBRARY_CACHE_KEY = "library_cache_v1";
+    private static final String LIBRARY_CACHE_KEY = "library_cache_v2";
     private static final int MOOD_TAG_READER_VERSION = 2;
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
@@ -193,6 +193,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int heldSeekPosition = 0;
     private int heldSeekDuration = 0;
     private boolean playerPrepared = false;
+    private boolean activeTrackUsesUri = true;
+    private boolean playbackFallbackAttempted = false;
     private final Runnable heldSeekRunnable = new Runnable() {
         @Override public void run() {
             if (seekDirection == 0 || player == null || !playerPrepared) return;
@@ -435,9 +437,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 song.dateAdded = item.optLong("dateAdded", 0L);
                 song.path = item.optString("path", "");
                 if (song.path.length() == 0) song.path = null;
-                // Cached libraries can predate the hidden-folder filter. Apply the
-                // exact same visibility rule before a cached track reaches the UI.
-                if (!isVisibleAudioPath(song.path, visibleDirectoryCache)) continue;
+                song.displayName = item.optString("displayName", "");
+                if (song.displayName.length() == 0) song.displayName = null;
+                // The cache format was bumped so every device performs a fresh
+                // MediaStore scan, and cached rows are still checked independently.
+                if (!isVisibleAudioPath(song.path, song.displayName, visibleDirectoryCache)) continue;
                 song.albumArtPath = item.optString("albumArtPath", "");
                 if (song.albumArtPath.length() == 0) song.albumArtPath = null;
                 song.albumArtist = item.optString("albumArtist", "");
@@ -474,6 +478,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 item.put("duration", song.duration);
                 item.put("dateAdded", song.dateAdded);
                 item.put("path", song.path == null ? "" : song.path);
+                item.put("displayName", song.displayName == null ? "" : song.displayName);
                 item.put("albumArtPath", song.albumArtPath == null ? "" : song.albumArtPath);
                 item.put("albumArtist", song.albumArtist == null ? "" : song.albumArtist);
                 item.put("musicKey", song.key == null ? "" : song.key);
@@ -554,14 +559,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 MediaStore.Audio.Media.ALBUM_ID,
                 MediaStore.Audio.Media.DURATION,
                 MediaStore.Audio.Media.DATA,
+                MediaStore.MediaColumns.DISPLAY_NAME,
                 MediaStore.Audio.Media.DATE_ADDED,
                 MediaStore.Audio.Media.IS_MUSIC
         };
         try {
             String selection = MediaStore.Audio.Media.IS_MUSIC + "=1 AND "
                     + MediaStore.Audio.Media.DATA + " NOT LIKE ? AND "
-                    + MediaStore.Audio.Media.DATA + " NOT LIKE ?";
-            String[] selectionArgs = new String[]{"%/.%/%", "%/.%"};
+                    + MediaStore.Audio.Media.DATA + " NOT LIKE ? AND "
+                    + MediaStore.MediaColumns.DISPLAY_NAME + " NOT LIKE ?";
+            String[] selectionArgs = new String[]{"%/.%/%", "%/.%", ".%"};
             try {
                 cursor = getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                         projection, selection, selectionArgs, null);
@@ -580,6 +587,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 int albumIdCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM_ID);
                 int durationCol = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION);
                 int pathCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA);
+                int displayNameCol = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME);
                 int dateCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATE_ADDED);
                 if (idCol >= 0) {
                     while (cursor.moveToNext()) {
@@ -593,7 +601,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         song.albumArtist = albumArtistByAlbum.get(song.albumId);
                         song.duration = durationCol >= 0 ? cursor.getLong(durationCol) : 0;
                         song.path = pathCol >= 0 ? cursor.getString(pathCol) : null;
-                        if (!isVisibleAudioPath(song.path, visibleDirectoryCache)) continue;
+                        song.displayName = displayNameCol >= 0 ? cursor.getString(displayNameCol) : null;
+                        if (!isVisibleAudioPath(song.path, song.displayName, visibleDirectoryCache)) continue;
                         song.dateAdded = dateCol >= 0 ? cursor.getLong(dateCol) : 0;
                         song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
                         song.albumArtPath = artworkByAlbum.get(song.albumId);
@@ -613,9 +622,18 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         return songs;
     }
 
-    /** Reject files whose own name or any ancestor directory begins with a dot. */
+    /** Reject hidden audio names, hidden path components and .nomedia directories. */
     private boolean isVisibleAudioPath(String path, Map<String, Boolean> directoryCache) {
+        return isVisibleAudioPath(path, null, directoryCache);
+    }
+
+    private boolean isVisibleAudioPath(String path, String displayName, Map<String, Boolean> directoryCache) {
         if (path == null || path.trim().length() == 0) return false;
+        if (displayName != null && displayName.trim().length() > 0) {
+            String name = displayName.trim();
+            try { name = Uri.decode(name); } catch (Exception ignored) { }
+            if (name.startsWith(".") || hasDotPrefixedPathComponent(name)) return false;
+        }
         String normalized = path.trim().replace('\\', '/');
         if (normalized.regionMatches(true, 0, "file://", 0, 7)) {
             try { normalized = Uri.decode(Uri.parse(normalized).getPath()); }
@@ -635,9 +653,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         } catch (IOException ignored) {
             file = file.getAbsoluteFile();
         }
-        // MediaStore can retain stale rows after files are moved or removed.
-        // A visible library entry must still resolve to a real local audio file.
-        if (!file.isFile()) return false;
+        // Do not trust stale MediaStore records or entries that the filesystem marks hidden.
+        if (!file.isFile() || file.isHidden()) return false;
         File current = file;
         boolean isFile = true;
         while (current != null) {
@@ -2584,32 +2601,57 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (miniSubtitle != null) miniSubtitle.setText(currentSong == null ? "" : currentSong.artist);
     }
 
-    private void setSongDataSource(MediaPlayer target, Song song) throws Exception {
+    private boolean setSongDataSource(MediaPlayer target, Song song) throws Exception {
+        return setSongDataSource(target, song, true);
+    }
+
+    /**
+     * URI-first matches the playback route used by Android's MediaStore player
+     * and is more compatible with removable storage on older vendor builds.
+     * The local path is retained as a fallback in either direction.
+     *
+     * @return true when the MediaStore content URI was selected.
+     */
+    private boolean setSongDataSource(MediaPlayer target, Song song, boolean preferUri) throws Exception {
         if (target == null || song == null) throw new IOException("Missing audio player or song");
-        if (song.path != null && song.path.trim().length() > 0) {
-            File audioFile = new File(song.path);
-            if (audioFile.isFile()) {
-                try {
-                    // Android 4.4 handles a direct filesystem path more reliably
-                    // on some OEM MediaStore providers than a generated content URI.
-                    target.setDataSource(audioFile.getAbsolutePath());
-                    return;
-                } catch (Exception pathError) {
-                    Log.w(TAG, "Direct audio path failed; retrying MediaStore URI for " + song.path, pathError);
-                    try { target.reset(); } catch (Exception ignored) { }
-                    if (song.uri == null) throw pathError;
-                }
+        Exception firstError = null;
+        File audioFile = song.path == null ? null : new File(song.path);
+        boolean hasLocalFile = audioFile != null && audioFile.isFile();
+
+        if (preferUri && song.uri != null) {
+            try {
+                target.setDataSource(this, song.uri);
+                return true;
+            } catch (Exception error) {
+                firstError = error;
+                Log.w(TAG, "MediaStore URI source failed; trying local path for " + song.id, error);
+                try { target.reset(); } catch (Exception ignored) { }
             }
         }
-        if (song.uri != null) {
-            target.setDataSource(this, song.uri);
-            return;
+
+        if (hasLocalFile) {
+            try {
+                target.setDataSource(audioFile.getAbsolutePath());
+                return false;
+            } catch (Exception error) {
+                if (firstError == null) firstError = error;
+                Log.w(TAG, "Local path source failed; trying MediaStore URI for " + song.id, error);
+                try { target.reset(); } catch (Exception ignored) { }
+            }
         }
-        if (song.path != null && song.path.trim().length() > 0) {
-            target.setDataSource(song.path);
-            return;
+
+        if (!preferUri && song.uri != null) {
+            try {
+                target.setDataSource(this, song.uri);
+                return true;
+            } catch (Exception error) {
+                if (firstError == null) firstError = error;
+                try { target.reset(); } catch (Exception ignored) { }
+            }
         }
-        throw new IOException("Song has no valid audio path or MediaStore URI");
+
+        if (firstError != null) throw firstError;
+        throw new IOException("Song has no usable local path or MediaStore URI");
     }
 
     private void startTrack(ArrayList<Song> songs, int index) {
@@ -2636,7 +2678,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             newPlayer.setOnPreparedListener(this);
             newPlayer.setOnCompletionListener(this);
             newPlayer.setOnErrorListener(this);
-            setSongDataSource(newPlayer, currentSong);
+            activeTrackUsesUri = setSongDataSource(newPlayer, currentSong, true);
+            playbackFallbackAttempted = false;
             player = newPlayer;
         } catch (Exception error) {
             Log.e(TAG, "Could not set audio source for track " + currentSong.id, error);
@@ -2665,8 +2708,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             newPlayer.prepareAsync();
         } catch (RuntimeException error) {
             Log.e(TAG, "prepareAsync failed for track " + currentSong.id, error);
-            releasePlayer();
-            Toast.makeText(this, "לא ניתן להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
+            if (!retryPlaybackWithAlternateSource("prepareAsync", error)) {
+                releasePlayer();
+                Toast.makeText(this, "לא ניתן להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
+            }
         }
         updatePlayerButtons();
     }
@@ -2918,6 +2963,49 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         updatePlayerButtons();
     }
 
+    /**
+     * A few Android 4.4 MediaStore providers accept a data source but fail during
+     * asynchronous prepare. Retry once through the other source representation.
+     */
+    private boolean retryPlaybackWithAlternateSource(String reason, Throwable cause) {
+        if (playbackFallbackAttempted || currentSong == null || currentSong.uri == null
+                || currentSong.path == null || !new File(currentSong.path).isFile()) return false;
+        playbackFallbackAttempted = true;
+        final boolean preferUri = !activeTrackUsesUri;
+        Log.w(TAG, "Retrying track " + currentSong.id + " with alternate source after " + reason, cause);
+        cancelPreloadedPlayer();
+        MediaPlayer failed = player;
+        player = null;
+        playerPrepared = false;
+        if (failed != null) {
+            try {
+                failed.setOnPreparedListener(null);
+                failed.setOnCompletionListener(null);
+                failed.setOnErrorListener(null);
+            } catch (Exception ignored) { }
+            try { failed.reset(); } catch (Exception ignored) { }
+            try { failed.release(); } catch (Exception ignored) { }
+        }
+
+        final MediaPlayer retry = new MediaPlayer();
+        try {
+            retry.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            retry.setOnPreparedListener(this);
+            retry.setOnCompletionListener(this);
+            retry.setOnErrorListener(this);
+            activeTrackUsesUri = setSongDataSource(retry, currentSong, preferUri);
+            player = retry;
+            retry.prepareAsync();
+            updatePlayerButtons();
+            return true;
+        } catch (Exception error) {
+            Log.e(TAG, "Alternate source retry failed for track " + currentSong.id, error);
+            if (player == retry) player = null;
+            try { retry.release(); } catch (Exception ignored) { }
+            return false;
+        }
+    }
+
     @Override public void onPrepared(MediaPlayer mp) {
         if (mp == null || mp != player) return;
         playerPrepared = true;
@@ -2959,6 +3047,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             return true;
         }
         if (mp == player) {
+            if (retryPlaybackWithAlternateSource("MediaPlayer error " + what + "/" + extra, null)) return true;
             Toast.makeText(this, "שגיאה בהשמעת השיר (" + what + "/" + extra + ")", Toast.LENGTH_LONG).show();
             releasePlayer();
             updatePlayerButtons();
@@ -3528,6 +3617,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         String artist;
         String album;
         String path;
+        String displayName;
         String albumArtPath;
         String albumArtist;
         String key;
