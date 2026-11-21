@@ -2184,7 +2184,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         return true;
     }
 
-    private void parseVorbisComments(byte[] data, int offset, MoodTagData result) {
+    private void parseVorbisComments(byte[] data, int offset, MoodTagData result) throws Exception {
         if (data == null || result == null || offset < 0 || offset + 8 > data.length) return;
         int position = offset;
         long vendorLength = littleEndianInt(data, position);
