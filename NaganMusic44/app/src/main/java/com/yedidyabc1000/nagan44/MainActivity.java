@@ -656,12 +656,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         labels.setPadding(dp(compact ? 8 : 10), 0, dp(6), 0);
         TextView name = text(title, compact ? 14 : 16, COLOR_TEXT, true);
         name.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         TextView description = text(subtitle, compact ? 11 : 12, COLOR_SUB, false);
         description.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         description.setSingleLine(true);
         description.setEllipsize(android.text.TextUtils.TruncateAt.END);
         TextView count = text(detail, compact ? 10 : 11, COLOR_SUB, false);
         count.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        count.setSingleLine(true);
+        count.setEllipsize(android.text.TextUtils.TruncateAt.END);
         labels.addView(name, new LinearLayout.LayoutParams(-1, -2));
         if (subtitle != null && subtitle.length() > 0) {
             labels.addView(description, new LinearLayout.LayoutParams(-1, dp(compact ? 15 : 19)));
