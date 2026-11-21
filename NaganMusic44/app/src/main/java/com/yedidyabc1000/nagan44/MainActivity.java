@@ -350,6 +350,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         ArrayList<Song> songs = new ArrayList<Song>();
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LIBRARY_CACHE_KEY, "");
         if (saved == null || saved.length() == 0) return songs;
+        HashMap<String, Boolean> visibleDirectoryCache = new HashMap<String, Boolean>();
         try {
             JSONArray array = new JSONArray(saved);
             for (int i = 0; i < array.length(); i++) {
@@ -367,6 +368,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 song.dateAdded = item.optLong("dateAdded", 0L);
                 song.path = item.optString("path", "");
                 if (song.path.length() == 0) song.path = null;
+                // Cached libraries can predate the hidden-folder filter. Apply the
+                // exact same visibility rule before a cached track reaches the UI.
+                if (!isVisibleAudioPath(song.path, visibleDirectoryCache)) continue;
                 song.albumArtPath = item.optString("albumArtPath", "");
                 if (song.albumArtPath.length() == 0) song.albumArtPath = null;
                 song.albumArtist = item.optString("albumArtist", "");
@@ -626,7 +630,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ARTISTS, "אמנים"); } });
         addHomeRow(page, "אלבומים", "", albumGroups(allSongs).size() + " אלבומים", "▤", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
-        addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☷", compact, compactRowHeight,
+        addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☰", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_PLAYLISTS, "פלייליסטים"); } });
 
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1f));
@@ -1434,7 +1438,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
         artHolder.setBackgroundColor(COLOR_BG);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.84f);
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 1.02f);
         artParams.topMargin = dp(10);
         artParams.bottomMargin = dp(3);
         content.addView(artHolder, artParams);
@@ -1449,7 +1453,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowAlbum = text(currentSong == null ? "" : currentSong.album, 12, COLOR_SUB, false);
         nowAlbum.setGravity(Gravity.CENTER);
         content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, dp(14)));
-        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.10f));
+        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.05f));
 
         LinearLayout timeline = new LinearLayout(this);
         timeline.setOrientation(LinearLayout.VERTICAL);
@@ -1458,7 +1462,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration));
         seekBar.setProgress(player != null ? safePosition() : 0);
         seekBar.setPadding(dp(8), dp(8), dp(8), dp(8));
-        seekBar.setMinimumHeight(dp(42));
+        seekBar.setMinimumHeight(dp(38));
         if (Build.VERSION.SDK_INT >= 17) seekBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         seekBar.setProgressDrawable(new TimelineProgressDrawable());
         seekBar.setThumb(createTimelineThumb());
@@ -1474,7 +1478,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { }
             }
         });
-        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(42)));
+        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(38)));
         LinearLayout times = new LinearLayout(this);
         times.setOrientation(LinearLayout.HORIZONTAL);
         times.setGravity(Gravity.CENTER_VERTICAL);
@@ -1486,22 +1490,22 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(-1, dp(18));
         timeParams.topMargin = dp(3);
         timeline.addView(times, timeParams);
-        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(66));
+        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(60));
         timelineParams.topMargin = dp(0);
         content.addView(timeline, timelineParams);
 
         LinearLayout controls = new LinearLayout(this);
         controls.setGravity(Gravity.CENTER);
         controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setPadding(0, dp(1), 0, dp(1));
+        controls.setPadding(0, 0, 0, 0);
         TransportButton previous = new TransportButton(this, TransportButton.TYPE_PREVIOUS);
         previous.setContentDescription("השיר הקודם; לחיצה ארוכה: הרצה אחורה");
         previous.setBackgroundDrawable(stateRoundRect(0xffe8eef0, 0xffd4e0e4, 26));
         installHoldSeek(previous, -1, new Runnable() {
             @Override public void run() { playPrevious(); }
         });
-        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(40), dp(40));
-        sideParams.rightMargin = dp(18);
+        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(34), dp(34));
+        sideParams.rightMargin = dp(14);
         controls.addView(previous, sideParams);
 
         nowPlayButton = new TransportButton(this, TransportButton.TYPE_PLAY);
@@ -1511,7 +1515,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(56), dp(56)));
+        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         TransportButton next = new TransportButton(this, TransportButton.TYPE_NEXT);
         next.setContentDescription("השיר הבא; לחיצה ארוכה: הרצה קדימה");
@@ -1519,10 +1523,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(next, 1, new Runnable() {
             @Override public void run() { playNext(true); }
         });
-        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(40), dp(40));
-        nextParams.leftMargin = dp(18);
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(34), dp(34));
+        nextParams.leftMargin = dp(14);
         controls.addView(next, nextParams);
-        content.addView(controls, new LinearLayout.LayoutParams(-1, dp(64)));
+        content.addView(controls, new LinearLayout.LayoutParams(-1, dp(54)));
 
         nowPlayingRoot.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(nowPlayingRoot);
