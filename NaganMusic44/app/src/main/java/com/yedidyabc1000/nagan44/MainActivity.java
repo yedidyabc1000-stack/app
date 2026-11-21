@@ -1032,10 +1032,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         entries.add(moodEntry("אנרגטי", "קצב מהיר", MIX_ENERGETIC));
         entries.add(moodEntry("דרמטי", "מינורי וקצב מהיר", MIX_DRAMATIC));
         SuperMixStats stats = getSuperMixStats();
-        String detail = stats.ready
-                ? "מוכן · מבוסס על " + stats.distinctTracks + " שירים שנשמעו"
-                : "נעול עד 10 שירים שונים ו־30 השמעות · כרגע " + stats.distinctTracks
-                        + "/10 שירים ו־" + stats.totalPlays + "/30 השמעות";
+        String detail = moodTagScanRunning
+                ? "סורק נתוני סגנון ומצב רוח..."
+                : stats.ready
+                        ? "מוכן · מבוסס על " + stats.distinctTracks + " שירים שנשמעו"
+                        : "נעול עד 10 שירים שונים ו־30 השמעות · כרגע " + stats.distinctTracks
+                                + "/10 שירים ו־" + stats.totalPlays + "/30 השמעות";
         entries.add(Entry.action("סופר מיקס", "התאמה אישית לפי השירים, האמנים, הסגנונות ומצבי הרוח שלך · " + detail, MIX_SUPER));
     }
 
@@ -1142,6 +1144,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     + SUPER_MIX_MIN_TRACKS + " שירים שונים ו־" + SUPER_MIX_MIN_PLAYS
                     + " השמעות. כרגע: " + stats.distinctTracks + " שירים ו־"
                     + stats.totalPlays + " השמעות.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (moodTagScanRunning) {
+            Toast.makeText(this, "סריקת תגיות הסגנון ומצב הרוח עדיין מתבצעת. נסה שוב לאחר סיומה.", Toast.LENGTH_LONG).show();
             return;
         }
         if (allSongs.size() == 0) return;
