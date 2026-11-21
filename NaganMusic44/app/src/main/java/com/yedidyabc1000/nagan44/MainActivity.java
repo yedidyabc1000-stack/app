@@ -508,8 +508,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     + MediaStore.Audio.Media.DATA + " NOT LIKE ? AND "
                     + MediaStore.Audio.Media.DATA + " NOT LIKE ?";
             String[] selectionArgs = new String[]{"%/.%/%", "%/.%"};
-            cursor = getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                    projection, selection, selectionArgs, null);
+            try {
+                cursor = getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        projection, selection, selectionArgs, null);
+            } catch (Exception unsupportedSelection) {
+                // A few old OEM MediaStore providers reject compound DATA clauses.
+                // Fall back to the broad query; isVisibleAudioPath below remains the final filter.
+                Log.w(TAG, "MediaStore path selection unavailable; applying Java path filter", unsupportedSelection);
+                cursor = getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        projection, MediaStore.Audio.Media.IS_MUSIC + "=1", null, null);
+            }
             if (cursor != null) {
                 int idCol = cursor.getColumnIndex(MediaStore.Audio.Media._ID);
                 int titleCol = cursor.getColumnIndex(MediaStore.Audio.Media.TITLE);
@@ -2240,7 +2248,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                                 .putString(LIBRARY_CACHE_KEY, serializeLibraryCache(allSongs)).apply();
                         browserEntriesCache.remove(TAB_MIXES);
-                        if (activeTab == TAB_MIXES && detailLevel == 0) renderBrowser();
+                        if (activeTab == TAB_MIXES && detailLevel == 0) {
+                            renderBrowser();
+                        } else if (activeTab == TAB_MIXES && detailLevel == 1) {
+                            visibleEntries.clear();
+                            addMoodEntries(visibleEntries);
+                            renderBrowser();
+                        }
                         Toast.makeText(MainActivity.this, "סריקת תגיות המוזיקה הושלמה", Toast.LENGTH_SHORT).show();
                     }
                 });
