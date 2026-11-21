@@ -1143,45 +1143,138 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         } catch (Exception error) { Toast.makeText(this, "לא ניתן לפתוח בורר קבצים במכשיר", Toast.LENGTH_LONG).show(); }
     }
 
-    private void importPlaylistFile(Uri uri) {
-        BufferedReader reader = null; ArrayList<Song> selected = new ArrayList<Song>(); String displayName = null;
-        Cursor nameCursor = null;
-        try { nameCursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null); if (nameCursor != null && nameCursor.moveToFirst()) displayName = nameCursor.getString(0); }
-        catch (Exception ignored) { } finally { if (nameCursor != null) nameCursor.close(); }
-        try {
-            InputStream input = getContentResolver().openInputStream(uri);
-            if (input == null) throw new IllegalStateException("קובץ לא זמין");
-            reader = new BufferedReader(new InputStreamReader(input, "UTF-8")); String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim(); if (line.length() == 0 || line.startsWith("#")) continue;
-                if (line.startsWith("File") && line.indexOf('=') > 0) line = line.substring(line.indexOf('=') + 1).trim();
-                Song song = findPlaylistSong(line); if (song != null && !selected.contains(song)) selected.add(song);
+    private void importPlaylistFile(final Uri uri) {
+        final ArrayList<Song> librarySnapshot = new ArrayList<Song>(allSongs);
+        Toast.makeText(this, "מייבא את רשימת ההשמעה...", Toast.LENGTH_SHORT).show();
+        Thread worker = new Thread(new Runnable() {
+            @Override public void run() {
+                final PlaylistImportResult result = readPlaylistFile(uri, librarySnapshot);
+                handler.post(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing()) return;
+                        if (result.errorMessage != null) {
+                            Log.w(TAG, "Playlist import failed: " + result.errorMessage);
+                            Toast.makeText(MainActivity.this, "לא ניתן לקרוא את קובץ רשימת ההשמעה", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        if (result.songIds.size() == 0) {
+                            Toast.makeText(MainActivity.this, "לא נמצאו בקובץ שירים שקיימים בספריית הנגן", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        String name = result.displayName;
+                        if (name == null || name.length() == 0) name = "רשימה מיובאת";
+                        int dot = name.lastIndexOf('.');
+                        if (dot > 0) name = name.substring(0, dot);
+                        UserPlaylist playlist = new UserPlaylist(name);
+                        playlist.songIds.addAll(result.songIds);
+                        customPlaylists.add(playlist);
+                        browserEntriesCache.remove(TAB_PLAYLISTS);
+                        saveUserPlaylists();
+                        Toast.makeText(MainActivity.this, "יובאו " + result.songIds.size() + " שירים", Toast.LENGTH_LONG).show();
+                        activeTab = TAB_PLAYLISTS;
+                        lastContentTab = TAB_PLAYLISTS;
+                        detailLevel = 0;
+                        renderBrowser();
+                    }
+                });
             }
-        } catch (Exception error) { Toast.makeText(this, "לא ניתן לקרוא את קובץ רשימת ההשמעה", Toast.LENGTH_LONG).show(); return; }
-        finally { if (reader != null) try { reader.close(); } catch (Exception ignored) { } }
-        if (selected.size() == 0) { Toast.makeText(this, "לא נמצאו בקובץ שירים שקיימים בספריית הנגן", Toast.LENGTH_LONG).show(); return; }
-        if (displayName == null || displayName.length() == 0) displayName = "רשימה מיובאת";
-        int dot = displayName.lastIndexOf('.'); if (dot > 0) displayName = displayName.substring(0, dot);
-        UserPlaylist playlist = new UserPlaylist(displayName); for (Song song : selected) playlist.songIds.add(song.id);
-        customPlaylists.add(playlist); browserEntriesCache.remove(TAB_PLAYLISTS); saveUserPlaylists();
-        Toast.makeText(this, "יובאו " + selected.size() + " שירים", Toast.LENGTH_LONG).show();
-        activeTab = TAB_PLAYLISTS; lastContentTab = TAB_PLAYLISTS; detailLevel = 0; renderBrowser();
+        }, "nagan-playlist-import");
+        worker.setPriority(Thread.NORM_PRIORITY - 1);
+        worker.start();
     }
 
-    private Song findPlaylistSong(String rawPath) {
-        if (rawPath == null) return null;
-        String candidate = rawPath.trim().replace('\\', '/');
-        if (candidate.startsWith("file://")) try { candidate = Uri.decode(Uri.parse(candidate).getPath()); } catch (Exception ignored) { }
-        String normalized = candidate.toLowerCase(Locale.US); String fileName = new File(candidate).getName().toLowerCase(Locale.US);
-        for (Song song : allSongs) {
-            if (song.uri != null && song.uri.toString().equalsIgnoreCase(candidate)) return song;
-            if (song.path != null) {
-                String p = song.path.replace('\\', '/'); String lower = p.toLowerCase(Locale.US);
-                if (lower.equals(normalized) || lower.endsWith("/" + normalized) || normalized.endsWith("/" + lower)) return song;
-                if (new File(p).getName().equalsIgnoreCase(fileName)) return song;
+    private PlaylistImportResult readPlaylistFile(Uri uri, List<Song> songs) {
+        PlaylistImportResult result = new PlaylistImportResult();
+        Cursor nameCursor = null;
+        InputStream input = null;
+        BufferedReader reader = null;
+        try {
+            try {
+                nameCursor = getContentResolver().query(uri,
+                        new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
+                if (nameCursor != null && nameCursor.moveToFirst()) {
+                    int nameColumn = nameCursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                    if (nameColumn >= 0) result.displayName = nameCursor.getString(nameColumn);
+                }
+            } catch (Exception error) {
+                Log.d(TAG, "Could not read playlist display name", error);
+            } finally {
+                if (nameCursor != null) nameCursor.close();
+            }
+
+            PlaylistMatchIndex index = buildPlaylistMatchIndex(songs);
+            input = getContentResolver().openInputStream(uri);
+            if (input == null) throw new IllegalStateException("Playlist stream is unavailable");
+            reader = new BufferedReader(new InputStreamReader(input, "UTF-8"), 8192);
+            HashMap<Long, Boolean> addedIds = new HashMap<Long, Boolean>();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.length() == 0) continue;
+                if (line.charAt(0) == 65279) line = line.substring(1).trim();
+                if (line.length() == 0 || line.startsWith("#")) continue;
+                if (line.regionMatches(true, 0, "File", 0, 4) && line.indexOf('=') > 0) {
+                    line = line.substring(line.indexOf('=') + 1).trim();
+                }
+                Song song = findPlaylistSong(line, index);
+                if (song != null && !addedIds.containsKey(song.id)) {
+                    addedIds.put(song.id, Boolean.TRUE);
+                    result.songIds.add(song.id);
+                }
+            }
+        } catch (Exception error) {
+            result.errorMessage = error.toString();
+        } finally {
+            if (reader != null) {
+                try { reader.close(); } catch (Exception ignored) { }
+            } else if (input != null) {
+                try { input.close(); } catch (Exception ignored) { }
             }
         }
-        return null;
+        return result;
+    }
+
+    private PlaylistMatchIndex buildPlaylistMatchIndex(List<Song> songs) {
+        PlaylistMatchIndex index = new PlaylistMatchIndex();
+        for (Song song : songs) {
+            if (song.uri != null) index.byUri.put(song.uri.toString().toLowerCase(Locale.US), song);
+            if (song.path != null && song.path.length() > 0) {
+                String normalizedPath = normalizePlaylistPath(song.path);
+                index.byPath.put(normalizedPath, song);
+                String fileName = new File(normalizedPath).getName();
+                if (fileName.length() > 0 && !index.byFileName.containsKey(fileName)) {
+                    index.byFileName.put(fileName, song);
+                }
+            }
+        }
+        return index;
+    }
+
+    private String normalizePlaylistPath(String path) {
+        String normalized = path == null ? "" : path.trim().replace('\\', '/').toLowerCase(Locale.US);
+        while (normalized.startsWith("./")) normalized = normalized.substring(2);
+        return normalized;
+    }
+
+    private Song findPlaylistSong(String rawPath, PlaylistMatchIndex index) {
+        if (rawPath == null || index == null) return null;
+        String candidate = rawPath.trim().replace('\\', '/');
+        if (candidate.length() == 0) return null;
+
+        String lowerCandidate = candidate.toLowerCase(Locale.US);
+        Song directUriMatch = index.byUri.get(lowerCandidate);
+        if (directUriMatch != null) return directUriMatch;
+
+        if (lowerCandidate.startsWith("file://")) {
+            try { candidate = Uri.decode(Uri.parse(candidate).getPath()); }
+            catch (Exception ignored) { }
+        }
+        String normalized = normalizePlaylistPath(candidate);
+        Song pathMatch = index.byPath.get(normalized);
+        if (pathMatch != null) return pathMatch;
+
+        String fileName = new File(normalized).getName();
+        return fileName.length() == 0 ? null : index.byFileName.get(fileName);
     }
 
     private ArrayList<Song> songsForPlaylist(UserPlaylist playlist) {
@@ -2342,6 +2435,18 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             super.onDraw(canvas);
             canvas.restoreToCount(save);
         }
+    }
+
+    private static class PlaylistImportResult {
+        String displayName;
+        String errorMessage;
+        final ArrayList<Long> songIds = new ArrayList<Long>();
+    }
+
+    private static class PlaylistMatchIndex {
+        final HashMap<String, Song> byUri = new HashMap<String, Song>();
+        final HashMap<String, Song> byPath = new HashMap<String, Song>();
+        final HashMap<String, Song> byFileName = new HashMap<String, Song>();
     }
 
     private static class UserPlaylist {
