@@ -598,7 +598,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
         float screenHeightDp = metrics.heightPixels / metrics.density;
-        boolean compact = screenHeightDp < 440f;
+        boolean compact = screenHeightDp < 520f;
         int compactRowHeight = Math.max(50, Math.min(66, (int) ((screenHeightDp - 102f) / 5f)));
         int pagePadding = compact ? 6 : 12;
         LinearLayout page = new LinearLayout(this);
