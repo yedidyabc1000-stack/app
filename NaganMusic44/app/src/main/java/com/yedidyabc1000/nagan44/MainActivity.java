@@ -229,6 +229,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             ArrayList<Song> cachedSongs = readLibraryCache();
             if (cachedSongs.size() > 0) {
                 reconcileLibrary(cachedSongs);
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString(LIBRARY_CACHE_KEY, serializeLibraryCache(allSongs)).apply();
                 renderBrowser();
                 prepareBrowserEntriesCacheAsync(new ArrayList<Song>(cachedSongs));
                 scanMissingMoodTagsAsync();
@@ -612,6 +614,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         HashMap<Long, Song> byId = new HashMap<Long, Song>();
         for (Song song : loadedSongs) byId.put(song.id, song);
         Song oldCurrent = currentSong;
+        moodTagScanToken++;
+        moodTagScanRunning = false;
         allSongs.clear(); allSongs.addAll(loadedSongs);
         moodMixIndex = buildMoodMixIndex(allSongs);
         libraryRevision++;
