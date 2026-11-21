@@ -2186,7 +2186,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             Log.d(TAG, "Embedded genre metadata unavailable for " + file, error);
             return null;
         } finally {
-            try { retriever.release(); } catch (RuntimeException ignored) { }
+            try { retriever.release(); } catch (Exception ignored) { }
         }
     }
 
