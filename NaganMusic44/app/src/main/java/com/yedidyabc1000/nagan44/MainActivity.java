@@ -200,7 +200,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
                         heldSeekPosition + seekDirection * 2500));
                 cancelCrossfadeForSeek();
-            player.seekTo(heldSeekPosition);
+                player.seekTo(heldSeekPosition);
                 if (seekBar != null) updateSeekBarTimeline(heldSeekPosition, heldSeekDuration);
                 if (elapsedText != null) elapsedText.setText(formatTime(heldSeekPosition));
             } catch (IllegalStateException ignored) { }
@@ -679,12 +679,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             if (updated == null) { releasePlayer(); currentSong = null; queue.clear(); queueIndex = -1; }
             else currentSong = updated;
         }
+        cancelPreloadedPlayer();
         ArrayList<Song> updatedQueue = new ArrayList<Song>(); int newIndex = -1;
         for (int i = 0; i < queue.size(); i++) {
             Song updated = byId.get(queue.get(i).id);
             if (updated != null) { if (i == queueIndex) newIndex = updatedQueue.size(); updatedQueue.add(updated); }
         }
         queue.clear(); queue.addAll(updatedQueue); queueIndex = currentSong == null ? -1 : newIndex;
+        if (playerPrepared) prepareNextPlayer();
         if (forcedNextSongId >= 0 && !byId.containsKey(forcedNextSongId)) forcedNextSongId = -1L;
         for (UserPlaylist playlist : customPlaylists) {
             for (int j = playlist.songIds.size() - 1; j >= 0; j--) if (!byId.containsKey(playlist.songIds.get(j))) playlist.songIds.remove(j);
@@ -2963,6 +2965,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private void playPrevious() {
         if (queue.size() == 0) return;
         if (player != null && safePosition() > 3000) {
+            cancelCrossfadeForSeek();
             try { player.seekTo(0); return; } catch (Exception ignored) { }
         }
         queueIndex = queueIndex <= 0 ? queue.size() - 1 : queueIndex - 1;
