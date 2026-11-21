@@ -97,6 +97,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int MIX_RELAXED = 104;
     private static final int MIX_ENERGETIC = 105;
     private static final int MIX_DRAMATIC = 106;
+    private static final int MIX_SUPER = 107;
+    private static final int SUPER_MIX_MIN_TRACKS = 10;
+    private static final int SUPER_MIX_MIN_PLAYS = 30;
     private static final int REQUEST_IMPORT_PLAYLIST = 411;
     private static final int CUSTOM_PLAYLIST_BASE = 1000;
     private static final int COLOR_DARK = 0xff252525;
@@ -108,7 +111,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
     private static final String LIBRARY_CACHE_KEY = "library_cache_v1";
-    private static final int MOOD_TAG_READER_VERSION = 1;
+    private static final int MOOD_TAG_READER_VERSION = 2;
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
     private static final int COLOR_FOCUS = 0xffb7d2d6;
@@ -396,6 +399,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 song.key = item.optString("musicKey", "");
                 if (song.key.length() == 0) song.key = null;
                 song.bpm = item.optInt("bpm", 0);
+                song.genre = item.optString("genre", "");
+                if (song.genre.length() == 0) song.genre = null;
                 song.moodTagsScanned = item.optBoolean("moodTagsScanned", false);
                 song.moodTagReaderVersion = item.optInt("moodTagReaderVersion", 0);
                 song.uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
@@ -427,6 +432,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 item.put("albumArtist", song.albumArtist == null ? "" : song.albumArtist);
                 item.put("musicKey", song.key == null ? "" : song.key);
                 item.put("bpm", song.bpm);
+                item.put("genre", song.genre == null ? "" : song.genre);
                 item.put("moodTagsScanned", song.moodTagsScanned);
                 item.put("moodTagReaderVersion", song.moodTagReaderVersion);
                 array.put(item);
@@ -1025,6 +1031,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         entries.add(moodEntry("רגוע", "קצב איטי", MIX_RELAXED));
         entries.add(moodEntry("אנרגטי", "קצב מהיר", MIX_ENERGETIC));
         entries.add(moodEntry("דרמטי", "מינורי וקצב מהיר", MIX_DRAMATIC));
+        SuperMixStats stats = getSuperMixStats();
+        String detail = stats.ready
+                ? "מוכן · מבוסס על " + stats.distinctTracks + " שירים שנשמעו"
+                : "נעול עד 10 שירים שונים ו־30 השמעות · כרגע " + stats.distinctTracks
+                        + "/10 שירים ו־" + stats.totalPlays + "/30 השמעות";
+        entries.add(Entry.action("סופר מיקס", "התאמה אישית לפי השירים, האמנים, הסגנונות ומצבי הרוח שלך · " + detail, MIX_SUPER));
     }
 
     private Entry moodEntry(String title, String subtitle, int moodId) {
@@ -1039,17 +1051,24 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         int[] moodIds = new int[]{MIX_HAPPY, MIX_SAD, MIX_THOUGHTFUL, MIX_RELAXED, MIX_ENERGETIC, MIX_DRAMATIC};
         for (int moodId : moodIds) index.put(moodId, new ArrayList<Song>());
         for (Song song : songs) {
-            int mode = keyMode(song.key);
-            int bpm = song.bpm;
-            boolean hasBpm = bpm >= 30 && bpm <= 300;
-            if (mode == 0 && (!hasBpm || (bpm >= 95 && bpm <= 155))) index.get(MIX_HAPPY).add(song);
-            if (mode == 1 && (!hasBpm || bpm <= 105)) index.get(MIX_SAD).add(song);
-            if (mode == 1 && (!hasBpm || (bpm >= 75 && bpm <= 125))) index.get(MIX_THOUGHTFUL).add(song);
-            if (hasBpm && bpm <= 95) index.get(MIX_RELAXED).add(song);
-            if (hasBpm && bpm >= 120) index.get(MIX_ENERGETIC).add(song);
-            if (mode == 1 && hasBpm && bpm >= 105) index.get(MIX_DRAMATIC).add(song);
+            for (Integer moodId : moodIdsForSong(song)) index.get(moodId).add(song);
         }
         return index;
+    }
+
+    private ArrayList<Integer> moodIdsForSong(Song song) {
+        ArrayList<Integer> result = new ArrayList<Integer>();
+        if (song == null) return result;
+        int mode = keyMode(song.key);
+        int bpm = song.bpm;
+        boolean hasBpm = bpm >= 30 && bpm <= 300;
+        if (mode == 0 && (!hasBpm || (bpm >= 95 && bpm <= 155))) result.add(MIX_HAPPY);
+        if (mode == 1 && (!hasBpm || bpm <= 105)) result.add(MIX_SAD);
+        if (mode == 1 && (!hasBpm || (bpm >= 75 && bpm <= 125))) result.add(MIX_THOUGHTFUL);
+        if (hasBpm && bpm <= 95) result.add(MIX_RELAXED);
+        if (hasBpm && bpm >= 120) result.add(MIX_ENERGETIC);
+        if (mode == 1 && hasBpm && bpm >= 105) result.add(MIX_DRAMATIC);
+        return result;
     }
 
     /** Returns 0 for major, 1 for minor, and -1 when the key format is unknown. */
@@ -1100,6 +1119,126 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         int mixSize = Math.min(35, randomized.size());
         ArrayList<Song> mix = new ArrayList<Song>(randomized.subList(0, mixSize));
         showTrackList("מיקס " + moodTitle(moodId), mix);
+    }
+
+    private SuperMixStats getSuperMixStats() {
+        SuperMixStats stats = new SuperMixStats();
+        for (Song song : allSongs) {
+            int count = getCount(song.id);
+            if (count <= 0) continue;
+            stats.distinctTracks++;
+            stats.totalPlays += count;
+            if (count > stats.maxPlayCount) stats.maxPlayCount = count;
+        }
+        stats.ready = stats.distinctTracks >= SUPER_MIX_MIN_TRACKS
+                && stats.totalPlays >= SUPER_MIX_MIN_PLAYS;
+        return stats;
+    }
+
+    private void openSuperMix() {
+        final SuperMixStats stats = getSuperMixStats();
+        if (!stats.ready) {
+            Toast.makeText(this, "עדיין אין מספיק נתוני האזנה לסופר מיקס. דרושים לפחות "
+                    + SUPER_MIX_MIN_TRACKS + " שירים שונים ו־" + SUPER_MIX_MIN_PLAYS
+                    + " השמעות. כרגע: " + stats.distinctTracks + " שירים ו־"
+                    + stats.totalPlays + " השמעות.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (allSongs.size() == 0) return;
+
+        final HashMap<String, Double> artistPreferences = new HashMap<String, Double>();
+        final HashMap<String, Double> genrePreferences = new HashMap<String, Double>();
+        final HashMap<Integer, Double> moodPreferences = new HashMap<Integer, Double>();
+        for (Song song : allSongs) {
+            int count = getCount(song.id);
+            if (count <= 0) continue;
+            double weight = 1.0 + Math.log(1.0 + count);
+            String artistCredit = song.albumArtist == null || song.albumArtist.trim().length() == 0
+                    ? song.artist : song.albumArtist;
+            for (String artist : splitArtists(artistCredit)) {
+                addPreference(artistPreferences, artist.toLowerCase(Locale.US), weight);
+            }
+            for (String genre : genreTokens(song.genre)) addPreference(genrePreferences, genre, weight);
+            for (Integer moodId : moodIdsForSong(song)) {
+                Double old = moodPreferences.get(moodId);
+                moodPreferences.put(moodId, (old == null ? 0.0 : old.doubleValue()) + weight);
+            }
+        }
+
+        double maxArtist = maxPreference(artistPreferences);
+        double maxGenre = maxPreference(genrePreferences);
+        double maxMood = maxPreference(moodPreferences);
+        double maxDirect = Math.log(1.0 + Math.max(1, stats.maxPlayCount));
+        ArrayList<Song> remaining = new ArrayList<Song>(allSongs);
+        ArrayList<Song> mix = new ArrayList<Song>();
+        int mixSize = Math.min(35, remaining.size());
+        while (mix.size() < mixSize && remaining.size() > 0) {
+            double totalWeight = 0.0;
+            double[] weights = new double[remaining.size()];
+            for (int i = 0; i < remaining.size(); i++) {
+                Song candidate = remaining.get(i);
+                int count = getCount(candidate.id);
+                double direct = count > 0 ? Math.log(1.0 + count) / maxDirect : 0.0;
+                double artistAffinity = 0.0;
+                String credit = candidate.albumArtist == null || candidate.albumArtist.trim().length() == 0
+                        ? candidate.artist : candidate.albumArtist;
+                for (String artist : splitArtists(credit)) {
+                    artistAffinity = Math.max(artistAffinity, preferenceValue(artistPreferences,
+                            artist.toLowerCase(Locale.US), maxArtist));
+                }
+                double genreAffinity = 0.0;
+                for (String genre : genreTokens(candidate.genre)) {
+                    genreAffinity = Math.max(genreAffinity, preferenceValue(genrePreferences, genre, maxGenre));
+                }
+                double moodAffinity = 0.0;
+                for (Integer moodId : moodIdsForSong(candidate)) {
+                    Double value = moodPreferences.get(moodId);
+                    if (value != null && maxMood > 0) moodAffinity = Math.max(moodAffinity, value / maxMood);
+                }
+                double score = 1.0 + 4.5 * direct + 3.25 * artistAffinity
+                        + 2.5 * genreAffinity + 2.25 * moodAffinity;
+                score *= 0.85 + random.nextDouble() * 0.30;
+                weights[i] = score;
+                totalWeight += score;
+            }
+            double chosen = random.nextDouble() * totalWeight;
+            int selected = weights.length - 1;
+            for (int i = 0; i < weights.length; i++) {
+                chosen -= weights[i];
+                if (chosen <= 0.0) { selected = i; break; }
+            }
+            mix.add(remaining.remove(selected));
+        }
+        showTrackList("סופר מיקס", mix);
+    }
+
+    private void addPreference(Map<String, Double> preferences, String key, double weight) {
+        if (key == null || key.trim().length() == 0) return;
+        Double old = preferences.get(key);
+        preferences.put(key, (old == null ? 0.0 : old.doubleValue()) + weight);
+    }
+
+    private ArrayList<String> genreTokens(String rawGenre) {
+        ArrayList<String> result = new ArrayList<String>();
+        if (rawGenre == null) return result;
+        String[] values = rawGenre.toLowerCase(Locale.US).split("[,;/|]");
+        for (String value : values) {
+            String genre = value.trim();
+            if (genre.length() > 0 && !result.contains(genre)) result.add(genre);
+        }
+        return result;
+    }
+
+    private double maxPreference(Map<?, Double> preferences) {
+        double max = 0.0;
+        for (Double value : preferences.values()) if (value != null && value > max) max = value;
+        return max;
+    }
+
+    private double preferenceValue(Map<String, Double> preferences, String key, double max) {
+        if (key == null || max <= 0.0) return 0.0;
+        Double value = preferences.get(key);
+        return value == null ? 0.0 : Math.min(1.0, value / max);
     }
 
     private String moodTitle(int moodId) {
@@ -1198,6 +1337,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (entry.type == Entry.TYPE_ACTION) {
             if (entry.actionId == 1) promptCreatePlaylist(null);
             else if (entry.actionId == 2) launchPlaylistPicker();
+            else if (entry.actionId == MIX_SUPER) openSuperMix();
             else if (entry.actionId >= MIX_ACTION_BASE) openMoodMix(entry.actionId);
         } else if (entry.type == Entry.TYPE_SONG) {
             if (entry.song == null) return;
@@ -1783,6 +1923,28 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
     }
 
+    private void seekByMillis(int deltaMillis) {
+        if (player == null || !playerPrepared) return;
+        try {
+            int duration = player.getDuration();
+            if (duration <= 0) return;
+            int target = Math.max(0, Math.min(duration, player.getCurrentPosition() + deltaMillis));
+            seekDirection = 0;
+            handler.removeCallbacks(heldSeekRunnable);
+            heldSeekDuration = duration;
+            heldSeekPosition = target;
+            player.seekTo(target);
+            if (seekBar != null) {
+                seekBar.setMax(Math.max(1, duration));
+                seekBar.setProgress(target);
+            }
+            if (elapsedText != null) elapsedText.setText(formatTime(target));
+            if (durationText != null) durationText.setText(formatTime(duration));
+        } catch (IllegalStateException error) {
+            Log.w(TAG, "Hardware-key seek failed", error);
+        }
+    }
+
     private void seekToAbsolute(int requestedPosition) {
         if (player == null) return;
         try {
@@ -1984,6 +2146,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         MoodTagData data = readMoodTags(song.path);
         song.key = data.key;
         song.bpm = data.bpm;
+        song.genre = data.genre;
         song.moodTagsScanned = true;
         song.moodTagReaderVersion = MOOD_TAG_READER_VERSION;
     }
@@ -2001,10 +2164,35 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             else if (name.endsWith(".ogg") || name.endsWith(".oga") || name.endsWith(".opus")) {
                 readOggMoodTags(file, result);
             }
+            if (result.genre == null) result.genre = readMediaGenre(file);
         } catch (Exception error) {
             Log.d(TAG, "Could not read mood tags from " + path, error);
         }
         return result;
+    }
+
+    private String readMediaGenre(File file) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(file.getAbsolutePath());
+            return normalizeGenre(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE));
+        } catch (RuntimeException error) {
+            Log.d(TAG, "Embedded genre metadata unavailable for " + file, error);
+            return null;
+        } finally {
+            try { retriever.release(); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    private String normalizeGenre(String rawGenre) {
+        if (rawGenre == null) return null;
+        String value = rawGenre.replace("\u0000", " ").trim().replaceAll("\\s+", " ");
+        if (value.length() == 0) return null;
+        if (value.length() > 96) value = value.substring(0, 96).trim();
+        if (value.matches("\\(?\\d{1,3}\\)?")) {
+            value = "genre-" + value.replace("(", "").replace(")", "");
+        }
+        return value.toLowerCase(Locale.US);
     }
 
     private void readId3MoodTags(File file, MoodTagData result) {
@@ -2057,15 +2245,17 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
                 boolean keyFrame = "TKEY".equals(frameId) || "TKE".equals(frameId);
                 boolean bpmFrame = "TBPM".equals(frameId) || "TBP".equals(frameId);
-                if ((keyFrame || bpmFrame) && frameSize <= 4096) {
+                boolean genreFrame = "TCON".equals(frameId) || "TCO".equals(frameId);
+                if ((keyFrame || bpmFrame || genreFrame) && frameSize <= 4096) {
                     byte[] body = new byte[frameSize];
                     input.readFully(body);
                     String value = decodeId3Text(body);
                     if (keyFrame && result.key == null) result.key = value;
                     if (bpmFrame && result.bpm <= 0) result.bpm = parseBpm(value);
+                    if (genreFrame && result.genre == null) result.genre = normalizeGenre(value);
                 }
                 input.seek(nextFrame);
-                if (result.key != null && result.bpm > 0) break;
+                if (result.key != null && result.bpm > 0 && result.genre != null) break;
             }
         } catch (Exception error) {
             Log.d(TAG, "ID3 mood tag read skipped for " + file, error);
@@ -2224,6 +2414,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         } else if ("TKEY".equals(name) || "KEY".equals(name)
                 || "INITIALKEY".equals(name) || "INITIAL_KEY".equals(name)) {
             result.key = value;
+        } else if ("GENRE".equals(name) || "STYLE".equals(name) || "TCON".equals(name)) {
+            if (result.genre == null) result.genre = normalizeGenre(value);
         }
     }
 
@@ -2267,6 +2459,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                             if (current == null) continue;
                             current.key = item.getValue().key;
                             current.bpm = item.getValue().bpm;
+                            current.genre = item.getValue().genre;
                             current.moodTagsScanned = true;
                             current.moodTagReaderVersion = MOOD_TAG_READER_VERSION;
                         }
@@ -2307,12 +2500,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             copy.albumArtist = source.albumArtist;
             copy.key = source.key;
             copy.bpm = source.bpm;
+            copy.genre = source.genre;
             copy.moodTagsScanned = source.moodTagsScanned;
             copy.moodTagReaderVersion = source.moodTagReaderVersion;
             MoodTagData data = updates.get(source.id);
             if (data != null) {
                 copy.key = data.key;
                 copy.bpm = data.bpm;
+                copy.genre = data.genre;
                 copy.moodTagsScanned = true;
                 copy.moodTagReaderVersion = MOOD_TAG_READER_VERSION;
             }
@@ -2550,6 +2745,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (song == null) return;
         int count = getCount(song.id) + 1;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("plays_" + song.id, count).apply();
+        browserEntriesCache.remove(TAB_MIXES);
     }
 
     private int getCount(long id) {
@@ -2600,6 +2796,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (player != null && playerPrepared
+                && (keyCode == KeyEvent.KEYCODE_1 || keyCode == KeyEvent.KEYCODE_NUMPAD_1)) {
+            if (event == null || event.getRepeatCount() == 0) seekByMillis(-10000);
+            return true;
+        }
+        if (player != null && playerPrepared
+                && (keyCode == KeyEvent.KEYCODE_3 || keyCode == KeyEvent.KEYCODE_NUMPAD_3)) {
+            if (event == null || event.getRepeatCount() == 0) seekByMillis(10000);
+            return true;
+        }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == KeyEvent.KEYCODE_HEADSETHOOK) {
             togglePlayback(); return true;
         }
@@ -2958,6 +3164,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static class MoodTagData {
         String key;
         int bpm;
+        String genre;
+    }
+
+    private static class SuperMixStats {
+        int distinctTracks;
+        long totalPlays;
+        int maxPlayCount;
+        boolean ready;
     }
 
     private static class PlaylistImportResult {
@@ -2990,6 +3204,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         String albumArtist;
         String key;
         int bpm;
+        String genre;
         boolean moodTagsScanned;
         int moodTagReaderVersion;
         Uri uri;
