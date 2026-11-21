@@ -113,7 +113,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_TEXT = 0xff202020;
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
-    private static final String LIBRARY_CACHE_KEY = "library_cache_v2";
+    private static final String LIBRARY_CACHE_KEY = "library_cache_v3";
     private static final int MOOD_TAG_READER_VERSION = 2;
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
@@ -391,6 +391,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         Thread worker = new Thread(new Runnable() {
             @Override public void run() {
                 final ArrayList<Song> loadedSongs = scanLibrary();
+                removeHiddenSongs(loadedSongs);
                 final String cacheJson = serializeLibraryCache(loadedSongs);
                 final HashMap<Integer, ArrayList<Entry>> preparedEntries = prepareBaseBrowserEntries(loadedSongs);
                 runOnUiThread(new Runnable() {
@@ -622,67 +623,116 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         return songs;
     }
 
-    /** Reject hidden audio names, hidden path components and .nomedia directories. */
+    /**
+     * Strict visibility check. Check both the MediaStore path and its canonical
+     * target so a symlink/alias cannot bypass a hidden parent or .nomedia marker.
+     */
     private boolean isVisibleAudioPath(String path, Map<String, Boolean> directoryCache) {
         return isVisibleAudioPath(path, null, directoryCache);
     }
 
     private boolean isVisibleAudioPath(String path, String displayName, Map<String, Boolean> directoryCache) {
         if (path == null || path.trim().length() == 0) return false;
-        if (displayName != null && displayName.trim().length() > 0) {
-            String name = displayName.trim();
-            try { name = Uri.decode(name); } catch (Exception ignored) { }
-            if (name.startsWith(".") || hasDotPrefixedPathComponent(name)) return false;
-        }
-        String normalized = path.trim().replace('\\', '/');
+        String decodedName = decodeHiddenPathText(displayName);
+        if (isHiddenPathComponent(decodedName)) return false;
+
+        String normalized = decodeHiddenPathText(path.trim()).replace('\\', '/');
         if (normalized.regionMatches(true, 0, "file://", 0, 7)) {
-            try { normalized = Uri.decode(Uri.parse(normalized).getPath()); }
+            try { normalized = decodeHiddenPathText(Uri.parse(normalized).getPath()); }
             catch (Exception ignored) { }
-        } else {
-            try { normalized = Uri.decode(normalized); } catch (Exception ignored) { }
         }
         normalized = normalized.replace('\\', '/');
         String lower = normalized.toLowerCase(Locale.US);
-        if (lower.contains("/android/data/") || lower.contains("/android/obb/") || lower.contains("/lost.dir/")) return false;
-        if (hasDotPrefixedPathComponent(normalized)) return false;
-        File file = new File(normalized);
+        if (lower.contains("/android/data/") || lower.contains("/android/obb/")
+                || lower.contains("/lost.dir/") || lower.contains("/.trash/")) return false;
+        if (hasHiddenPathComponent(normalized)) return false;
+
+        File originalFile = new File(normalized);
+        if (!originalFile.isFile() || originalFile.isHidden()) return false;
+        if (!areAllParentDirectoriesVisible(originalFile, directoryCache)) return false;
+
+        File canonicalFile = originalFile;
         try {
-            String canonical = file.getCanonicalPath();
-            if (hasDotPrefixedPathComponent(canonical)) return false;
-            file = new File(canonical);
+            canonicalFile = new File(originalFile.getCanonicalPath());
         } catch (IOException ignored) {
-            file = file.getAbsoluteFile();
+            canonicalFile = originalFile.getAbsoluteFile();
         }
-        // Do not trust stale MediaStore records or entries that the filesystem marks hidden.
-        if (!file.isFile() || file.isHidden()) return false;
-        File current = file;
-        boolean isFile = true;
+        if (!canonicalFile.isFile() || canonicalFile.isHidden()) return false;
+        if (hasHiddenPathComponent(canonicalFile.getPath())) return false;
+        return areAllParentDirectoriesVisible(canonicalFile, directoryCache);
+    }
+
+    /** Decode repeatedly, since some OEM MediaStore implementations double-escape DATA. */
+    private String decodeHiddenPathText(String value) {
+        if (value == null) return null;
+        String result = value.trim();
+        for (int i = 0; i < 3; i++) {
+            String decoded;
+            try { decoded = Uri.decode(result); }
+            catch (Exception ignored) { break; }
+            if (decoded == null || decoded.equals(result)) break;
+            result = decoded;
+        }
+        return result;
+    }
+
+    private boolean areAllParentDirectoriesVisible(File file, Map<String, Boolean> directoryCache) {
+        File current = file == null ? null : file.getParentFile();
         while (current != null) {
-            String name = current.getName();
-            if (name != null && name.length() > 1 && name.charAt(0) == '.') return false;
-            if (!isFile) {
-                String key = current.getAbsolutePath();
-                Boolean visible = directoryCache == null ? null : directoryCache.get(key);
-                if (visible == null) {
-                    visible = !new File(current, ".nomedia").exists();
-                    if (directoryCache != null) directoryCache.put(key, visible);
-                }
-                if (!visible.booleanValue()) return false;
+            if (isHiddenPathComponent(current.getName()) || current.isHidden()) return false;
+            String key;
+            try { key = current.getCanonicalPath(); }
+            catch (IOException ignored) { key = current.getAbsolutePath(); }
+
+            Boolean visible = directoryCache == null ? null : directoryCache.get(key);
+            if (visible == null) {
+                boolean noMedia = new File(current, ".nomedia").exists();
+                boolean hiddenMarker = new File(current, ".hidden").exists();
+                visible = Boolean.valueOf(current.isDirectory() && !noMedia && !hiddenMarker);
+                if (directoryCache != null) directoryCache.put(key, visible);
             }
-            isFile = false;
+            if (!visible.booleanValue()) return false;
             current = current.getParentFile();
         }
         return true;
     }
 
-    private boolean hasDotPrefixedPathComponent(String path) {
+    private boolean isHiddenPathComponent(String component) {
+        if (component == null) return false;
+        String value = decodeHiddenPathText(component);
+        if (value == null) return false;
+        value = value.trim();
+        return value.length() > 1 && value.charAt(0) == '.';
+    }
+
+    private boolean hasHiddenPathComponent(String path) {
         if (path == null) return false;
         String[] parts = path.replace('\\', '/').split("/");
-        for (String part : parts) if (part.length() > 1 && part.charAt(0) == '.') return true;
+        for (String part : parts) if (isHiddenPathComponent(part)) return true;
         return false;
     }
 
+    /** Final safety pass used before caching or exposing the library to any tab. */
+    private void removeHiddenSongs(ArrayList<Song> songs) {
+        if (songs == null) return;
+        HashMap<String, Boolean> directoryCache = new HashMap<String, Boolean>();
+        for (int i = songs.size() - 1; i >= 0; i--) {
+            Song song = songs.get(i);
+            if (song == null || !isVisibleAudioPath(song.path, song.displayName, directoryCache)) {
+                songs.remove(i);
+            }
+        }
+    }
+
     private void reconcileLibrary(ArrayList<Song> loadedSongs) {
+        // Re-apply the strict rule at the last shared point before any browser,
+        // artist, album, mix or playlist list can be built from this snapshot.
+        removeHiddenSongs(loadedSongs);
+        detailLevel = 0;
+        detailTitle = "";
+        parentEntries = null;
+        parentTitle = "";
+        visibleEntries.clear();
         HashMap<Long, Song> byId = new HashMap<Long, Song>();
         for (Song song : loadedSongs) byId.put(song.id, song);
         Song oldCurrent = currentSong;
