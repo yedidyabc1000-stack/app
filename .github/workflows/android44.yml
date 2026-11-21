@@ -70,17 +70,16 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.2.3
+          tag_name: v2.3.0
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.2.3
+          name: נגן Android 4.4 – v2.3.0
           body: |
-            גרסה 2.2.3 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
-            תמונת העטיפה קיבלה שטח תצוגה גדול יותר, תוך שמירה על יחס הממדים המקורי ללא חיתוך.
-            כפתורי ההרצה וההפעלה הוקטנו מעט כדי לפנות מקום לעטיפה ולמקם את פרטי השיר וציר הזמן בחלק התחתון.
-            סמל הפלייליסטים במסך הפתיחה הוחלף.
-            קבצים מתיקיות ששמן מתחיל בנקודה מסוננים גם בעת טעינת ספרייה שמורה במטמון.
-            שורת המצב של Android נשארת גלויה, ורשימת האמנים נשארת מקובצת לפי Album Artist.
-            ייבוא M3U ו-PLS נשאר ברקע עם אינדקס מסלולים יעיל.
+            גרסה 2.3.0 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
+            נוספה קטגוריית "מיקסים" עם שישה מצבי רוח: שמח, עצוב, מהורהר, רגוע, אנרגטי ודרמטי.
+            סריקת הספרייה קוראת תגיות BPM וסולם מקובצי MP3 (ID3), FLAC ו-Ogg/Opus, שומרת אותן במטמון ובונה אינדקס למציאת שירים מתאימים.
+            כל כניסה למיקס בוחרת מחדש באקראי עד 35 שירים מתוך השירים המתאימים למצב הרוח.
+            סינון קבצים בתיקיות ששמן מתחיל בנקודה הוחמר גם בשאילתת MediaStore וגם בטעינת המטמון, עם מסלול גיבוי לספקי Android ישנים.
+            תמונת העטיפה, גודל הכפתורים, מיקום ציר הזמן, סמל הפלייליסטים ושורת המצב נשארו כפי שעודכנו בגרסאות הקודמות.
           files: |
             releases/NaganMusic44-Android44.apk
             releases/NaganMusic44-source.zip
@@ -92,7 +91,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.2.3-debug-apk
+          name: nagan-android44-2.3.0-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
