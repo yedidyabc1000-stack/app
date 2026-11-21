@@ -660,7 +660,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
         float screenHeightDp = metrics.heightPixels / metrics.density;
         boolean compact = screenHeightDp < 520f;
-        int compactRowHeight = Math.max(50, Math.min(66, (int) ((screenHeightDp - 102f) / 5f)));
+        int compactRowHeight = Math.max(48, Math.min(60, (int) ((screenHeightDp - 130f) / 6f)));
         int pagePadding = compact ? 6 : 12;
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
@@ -689,6 +689,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
         addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☰", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_PLAYLISTS, "פלייליסטים"); } });
+        addHomeRow(page, "מיקסים", "", "רשימות לפי מצב רוח", "♫", compact, compactRowHeight,
+                new Runnable() { @Override public void run() { openHomeCategory(TAB_MIXES, "מיקסים"); } });
 
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(root);
@@ -986,6 +988,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         } else if (activeTab == TAB_ALBUMS) {
             ArrayList<AlbumGroup> albums = albumGroups(allSongs);
             for (AlbumGroup album : albums) visibleEntries.add(Entry.album(album.title, artistLabel(album.songs), album.songs));
+        } else if (activeTab == TAB_MIXES) {
+            addMoodEntries(visibleEntries);
         } else {
             visibleEntries.add(Entry.action("יצירת רשימת השמעה", "יצירת פלייליסט חדש באפליקציה", 1));
             visibleEntries.add(Entry.action("ייבוא רשימת השמעה", "טעינת קובץ M3U או PLS מהמכשיר", 2));
@@ -998,6 +1002,82 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             visibleEntries.add(Entry.playlist("נוספו לאחרונה", "השירים שנוספו למכשיר לאחרונה", 3));
         }
         browserEntriesCache.put(activeTab, new ArrayList<Entry>(visibleEntries));
+    }
+
+    private void addMoodEntries(ArrayList<Entry> entries) {
+        entries.add(moodEntry("שמח", "מז'ורי וקצב בינוני־מהיר", MIX_HAPPY));
+        entries.add(moodEntry("עצוב", "מינורי וקצב איטי־מתון", MIX_SAD));
+        entries.add(moodEntry("מהורהר", "מינורי וקצב מתון", MIX_THOUGHTFUL));
+        entries.add(moodEntry("רגוע", "קצב איטי", MIX_RELAXED));
+        entries.add(moodEntry("אנרגטי", "קצב מהיר", MIX_ENERGETIC));
+        entries.add(moodEntry("דרמטי", "מינורי וקצב מהיר", MIX_DRAMATIC));
+    }
+
+    private Entry moodEntry(String title, String subtitle, int moodId) {
+        ArrayList<Song> candidates = moodMixIndex.get(moodId);
+        int count = candidates == null ? 0 : candidates.size();
+        String detail = moodTagScanRunning ? "סורק תגיות..." : count + " שירים מתאימים";
+        return Entry.action(title, subtitle + " · " + detail, moodId);
+    }
+
+    private HashMap<Integer, ArrayList<Song>> buildMoodMixIndex(List<Song> songs) {
+        HashMap<Integer, ArrayList<Song>> index = new HashMap<Integer, ArrayList<Song>>();
+        int[] moodIds = new int[]{MIX_HAPPY, MIX_SAD, MIX_THOUGHTFUL, MIX_RELAXED, MIX_ENERGETIC, MIX_DRAMATIC};
+        for (int moodId : moodIds) index.put(moodId, new ArrayList<Song>());
+        for (Song song : songs) {
+            int mode = keyMode(song.key);
+            int bpm = song.bpm;
+            boolean hasBpm = bpm >= 30 && bpm <= 300;
+            if (mode == 0 && (!hasBpm || (bpm >= 95 && bpm <= 155))) index.get(MIX_HAPPY).add(song);
+            if (mode == 1 && (!hasBpm || bpm <= 105)) index.get(MIX_SAD).add(song);
+            if (mode == 1 && (!hasBpm || (bpm >= 75 && bpm <= 125))) index.get(MIX_THOUGHTFUL).add(song);
+            if (hasBpm && bpm <= 95) index.get(MIX_RELAXED).add(song);
+            if (hasBpm && bpm >= 120) index.get(MIX_ENERGETIC).add(song);
+            if (mode == 1 && hasBpm && bpm >= 105) index.get(MIX_DRAMATIC).add(song);
+        }
+        return index;
+    }
+
+    /** Returns 0 for major, 1 for minor, and -1 when the key format is unknown. */
+    private int keyMode(String rawKey) {
+        if (rawKey == null) return -1;
+        String value = rawKey.trim().toLowerCase(Locale.US).replace(" ", "");
+        if (value.length() == 0) return -1;
+        if (value.matches("^(1[0-2]|[1-9])a$") || value.matches("^(1[0-2]|[1-9])m$")) return 1;
+        if (value.matches("^(1[0-2]|[1-9])b$") || value.matches("^(1[0-2]|[1-9])d$")) return 0;
+        if (value.contains("minor") || value.endsWith("min") || value.matches("^[a-g](#|b)?m$")) return 1;
+        if (value.contains("major") || value.endsWith("maj")) return 0;
+        if (value.matches("^[a-g](#|b)?$")) return 0;
+        return -1;
+    }
+
+    private void openMoodMix(int moodId) {
+        ArrayList<Song> candidates = moodMixIndex.get(moodId);
+        if (candidates == null || candidates.size() == 0) {
+            String message = moodTagScanRunning
+                    ? "תגיות הסולם וה־BPM עדיין נסרקות, נסה שוב בעוד רגע"
+                    : "לא נמצאו שירים עם תגיות מתאימות למיקס הזה";
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            return;
+        }
+        ArrayList<Song> randomized = new ArrayList<Song>(candidates);
+        Collections.shuffle(randomized, random);
+        // Pick a fresh random subset on every entry, up to 35 tracks.
+        int mixSize = Math.min(35, randomized.size());
+        ArrayList<Song> mix = new ArrayList<Song>(randomized.subList(0, mixSize));
+        showTrackList("מיקס " + moodTitle(moodId), mix);
+    }
+
+    private String moodTitle(int moodId) {
+        switch (moodId) {
+            case MIX_HAPPY: return "שמח";
+            case MIX_SAD: return "עצוב";
+            case MIX_THOUGHTFUL: return "מהורהר";
+            case MIX_RELAXED: return "רגוע";
+            case MIX_ENERGETIC: return "אנרגטי";
+            case MIX_DRAMATIC: return "דרמטי";
+            default: return "מותאם";
+        }
     }
 
     /** Build the heavy song, artist and album tabs away from the UI thread. */
@@ -1084,6 +1164,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (entry.type == Entry.TYPE_ACTION) {
             if (entry.actionId == 1) promptCreatePlaylist(null);
             else if (entry.actionId == 2) launchPlaylistPicker();
+            else if (entry.actionId >= MIX_ACTION_BASE) openMoodMix(entry.actionId);
         } else if (entry.type == Entry.TYPE_SONG) {
             if (entry.song == null) return;
             ArrayList<Song> playQueue = new ArrayList<Song>();
