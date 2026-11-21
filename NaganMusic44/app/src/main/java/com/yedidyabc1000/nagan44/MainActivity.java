@@ -205,8 +205,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         handler.post(progressRunnable);
@@ -598,34 +597,36 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         root.setBackgroundColor(COLOR_BG);
 
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-        boolean compact = metrics.heightPixels / metrics.density < 440f;
+        float screenHeightDp = metrics.heightPixels / metrics.density;
+        boolean compact = screenHeightDp < 440f;
+        int compactRowHeight = Math.max(50, Math.min(66, (int) ((screenHeightDp - 102f) / 5f)));
         int pagePadding = compact ? 6 : 12;
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(14), dp(pagePadding), dp(14), dp(pagePadding));
         page.setBackgroundColor(COLOR_BG);
 
-        TextView heading = text("הספרייה שלי", compact ? 19 : 22, COLOR_TEXT, true);
+        TextView heading = text("הספרייה שלי", compact ? 20 : 23, COLOR_TEXT, true);
         heading.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         heading.setPadding(dp(4), 0, dp(4), dp(compact ? 4 : 8));
-        page.addView(heading, new LinearLayout.LayoutParams(-1, dp(compact ? 30 : 40)));
+        page.addView(heading, new LinearLayout.LayoutParams(-1, dp(compact ? 32 : 42)));
 
         String currentTitle = currentSong == null ? "לא מתנגן שיר כרגע" : currentSong.title;
         String currentArtist = currentSong == null ? "מתנגן עכשיו" : "מתנגן עכשיו · " + currentSong.artist;
-        addHomeRow(page, currentTitle, currentArtist, "", "♫", compact,
+        addHomeRow(page, currentTitle, currentArtist, "", "♫", compact, compactRowHeight,
                 new Runnable() {
                     @Override public void run() {
                         activeTab = TAB_NOW_PLAYING;
                         renderNowPlaying();
                     }
                 });
-        addHomeRow(page, "שירים", "", allSongs.size() + " שירים", "≡", compact,
+        addHomeRow(page, "שירים", "", allSongs.size() + " שירים", "≡", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_SONGS, "שירים"); } });
-        addHomeRow(page, "אמנים", "", artistIndex().size() + " אמנים", "♬", compact,
+        addHomeRow(page, "אמנים", "", artistIndex().size() + " אמנים", "♬", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ARTISTS, "אמנים"); } });
-        addHomeRow(page, "אלבומים", "", albumGroups(allSongs).size() + " אלבומים", "▤", compact,
+        addHomeRow(page, "אלבומים", "", albumGroups(allSongs).size() + " אלבומים", "▤", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
-        addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☷", compact,
+        addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☷", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_PLAYLISTS, "פלייליסטים"); } });
 
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1f));
@@ -633,28 +634,28 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void addHomeRow(LinearLayout page, String title, String subtitle, String detail,
-                            String symbol, boolean compact, final Runnable action) {
+                            String symbol, boolean compact, int compactRowHeight, final Runnable action) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        card.setPadding(dp(compact ? 10 : 12), dp(compact ? 4 : 7),
-                dp(compact ? 10 : 12), dp(compact ? 4 : 7));
+        card.setPadding(dp(compact ? 10 : 13), dp(compact ? 5 : 8),
+                dp(compact ? 10 : 13), dp(compact ? 5 : 8));
         card.setBackgroundDrawable(roundRect(COLOR_ROW, 11));
         card.setFocusable(true);
         card.setClickable(true);
 
-        TextView icon = text(symbol, compact ? 20 : 23, 0xff52616a, true);
+        TextView icon = text(symbol, compact ? 22 : 25, 0xff52616a, true);
         icon.setGravity(Gravity.CENTER);
         icon.setBackgroundDrawable(roundRect(0xffd2d7db, 10));
-        int iconSize = compact ? 34 : 42;
+        int iconSize = compact ? Math.max(34, compactRowHeight - 16) : 46;
         card.addView(icon, new LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)));
 
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         labels.setPadding(dp(compact ? 8 : 10), 0, dp(6), 0);
-        TextView name = text(title, compact ? 14 : 16, COLOR_TEXT, true);
+        TextView name = text(title, compact ? 15 : 17, COLOR_TEXT, true);
         name.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         name.setSingleLine(true);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -688,8 +689,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { action.run(); }
         });
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(compact ? 48 : 64));
-        params.bottomMargin = dp(compact ? 4 : 7);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(compact ? compactRowHeight : 73));
+        params.bottomMargin = dp(compact ? 2 : 8);
         page.addView(card, params);
     }
 
@@ -1222,7 +1223,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private Map<String, ArrayList<Song>> artistIndex(List<Song> sourceSongs) {
         Map<String, ArrayList<Song>> result = new LinkedHashMap<String, ArrayList<Song>>();
         for (Song song : sourceSongs) {
-            String[] names = splitArtists(song.artist);
+            String artistCredit = song.albumArtist == null || song.albumArtist.trim().length() == 0
+                    ? song.artist : song.albumArtist;
+            String[] names = splitArtists(artistCredit);
             for (String name : names) {
                 if (name.length() == 0) continue;
                 ArrayList<Song> list = result.get(name);
@@ -1334,9 +1337,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         FrameLayout artHolder = new FrameLayout(this);
         nowArt = new RoundImageView(this);
-        nowArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        nowArt.setBackgroundDrawable(roundRect(0xffe5e8eb, 15));
+        nowArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
         nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
+        artHolder.setBackgroundColor(COLOR_BG);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.84f);
         artParams.topMargin = dp(10);
@@ -1449,12 +1452,36 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                             return;
                         }
                         target.setImageBitmap(bitmap);
+                        fitArtworkViewToBitmap(target, bitmap);
                     }
                 });
             }
         }, "nagan-artwork");
         worker.setPriority(Thread.MIN_PRIORITY);
         worker.start();
+    }
+
+    private void fitArtworkViewToBitmap(final ImageView target, final Bitmap bitmap) {
+        target.post(new Runnable() {
+            @Override public void run() {
+                if (target != nowArt || target.getParent() == null || bitmap == null) return;
+                View holder = (View) target.getParent();
+                int maxWidth = holder.getWidth() - holder.getPaddingLeft() - holder.getPaddingRight();
+                int maxHeight = holder.getHeight() - holder.getPaddingTop() - holder.getPaddingBottom();
+                if (maxWidth <= 0 || maxHeight <= 0 || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) return;
+                float aspect = bitmap.getWidth() / (float) bitmap.getHeight();
+                float width = maxWidth;
+                float height = width / aspect;
+                if (height > maxHeight) {
+                    height = maxHeight;
+                    width = height * aspect;
+                }
+                FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                        Math.max(1, Math.round(width)), Math.max(1, Math.round(height)), Gravity.CENTER);
+                target.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                target.setLayoutParams(params);
+            }
+        });
     }
 
     /**
@@ -2292,7 +2319,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         RoundImageView(Activity context) {
             super(context);
             cornerRadius = 15f * getResources().getDisplayMetrics().density;
-            setScaleType(ImageView.ScaleType.CENTER_CROP);
+            setScaleType(ImageView.ScaleType.FIT_CENTER);
         }
 
         @Override protected void onDraw(Canvas canvas) {
