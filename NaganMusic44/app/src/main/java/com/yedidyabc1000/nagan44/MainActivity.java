@@ -17,6 +17,10 @@ import android.graphics.Path;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.util.Log;
 import android.media.AudioManager;
@@ -155,7 +159,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int seekDirection = 0;
     private final Runnable heldSeekRunnable = new Runnable() {
         @Override public void run() {
-            if (seekDirection != 0) { seekBy(seekDirection * 2000); handler.postDelayed(this, 350L); }
+            if (seekDirection != 0) { seekBy(seekDirection * 750); handler.postDelayed(this, 180L); }
         }
     };
     private ContentObserver mediaObserver;
@@ -574,8 +578,111 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         return selector;
     }
 
+    private void renderHomeScreen() {
+        showingNowPlaying = false;
+        tabsScroll = null;
+        tabsRow = null;
+        root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(COLOR_BG);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(18), dp(22), dp(18), dp(24));
+        page.setBackgroundColor(COLOR_BG);
+
+        TextView heading = text("הספרייה שלי", 23, COLOR_TEXT, true);
+        heading.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        heading.setPadding(dp(4), 0, dp(4), dp(12));
+        page.addView(heading, new LinearLayout.LayoutParams(-1, dp(48)));
+
+        String currentTitle = currentSong == null ? "לא מתנגן שיר כרגע" : currentSong.title;
+        String currentArtist = currentSong == null ? "לחץ לפתיחת מסך הנגן" : currentSong.artist;
+        addHomeRow(page, "מתנגן עכשיו", currentTitle, currentArtist, "♫", true,
+                new Runnable() {
+                    @Override public void run() {
+                        activeTab = TAB_NOW_PLAYING;
+                        renderNowPlaying();
+                    }
+                });
+        addHomeRow(page, "שירים", "כל השירים שבמכשיר", allSongs.size() + " שירים", "≡", false,
+                new Runnable() { @Override public void run() { openHomeCategory(TAB_SONGS, "שירים"); } });
+        addHomeRow(page, "אמנים", "עיון לפי אמן", artistIndex().size() + " אמנים", "♬", false,
+                new Runnable() { @Override public void run() { openHomeCategory(TAB_ARTISTS, "אמנים"); } });
+        addHomeRow(page, "אלבומים", "עיון לפי אלבום", albumGroups(allSongs).size() + " אלבומים", "▤", false,
+                new Runnable() { @Override public void run() { openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
+        addHomeRow(page, "פלייליסטים", "רשימות ההשמעה שלך והמושמעים ביותר", customPlaylists.size() + " רשימות אישיות", "☷", false,
+                new Runnable() { @Override public void run() { openHomeCategory(TAB_PLAYLISTS, "פלייליסטים"); } });
+
+        scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        setContentView(root);
+    }
+
+    private void addHomeRow(LinearLayout page, String title, String subtitle, String detail,
+                            String symbol, boolean featured, final Runnable action) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        card.setPadding(dp(14), dp(10), dp(14), dp(10));
+        card.setBackgroundDrawable(roundRect(featured ? 0xffe0f5f6 : 0xffffffff, 13));
+        card.setFocusable(true);
+        card.setClickable(true);
+
+        TextView icon = text(symbol, featured ? 28 : 25,
+                featured ? 0xff007f8c : 0xff52616a, true);
+        icon.setGravity(Gravity.CENTER);
+        icon.setBackgroundDrawable(roundRect(featured ? 0xffb8e8eb : 0xffedf1f3, 12));
+        card.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+
+        LinearLayout labels = new LinearLayout(this);
+        labels.setOrientation(LinearLayout.VERTICAL);
+        labels.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
+        labels.setPadding(dp(12), 0, dp(8), 0);
+        TextView name = text(title, 16, COLOR_TEXT, true);
+        name.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        TextView description = text(subtitle, 13, COLOR_SUB, false);
+        description.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        description.setSingleLine(true);
+        description.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        TextView count = text(detail, 11, COLOR_SUB, false);
+        count.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        labels.addView(name, new LinearLayout.LayoutParams(-1, -2));
+        labels.addView(description, new LinearLayout.LayoutParams(-1, dp(21)));
+        labels.addView(count, new LinearLayout.LayoutParams(-1, dp(17)));
+        card.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        TextView arrow = text("‹", 26, featured ? 0xff007f8c : 0xff89949a, true);
+        arrow.setGravity(Gravity.CENTER);
+        card.addView(arrow, new LinearLayout.LayoutParams(dp(22), -1));
+
+        card.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { action.run(); }
+        });
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(82));
+        params.bottomMargin = dp(10);
+        page.addView(card, params);
+    }
+
+    private void openHomeCategory(int tab, String title) {
+        activeTab = tab;
+        detailLevel = 0;
+        parentEntries = null;
+        parentTitle = "";
+        populateBrowser();
+        detailLevel = 1;
+        detailTitle = title;
+        selectedPosition = 0;
+        renderBrowser();
+    }
+
     private void renderBrowser() {
-        if (detailLevel == 0 && activeTab == TAB_NOW_PLAYING) { renderNowPlaying(); return; }
+        if (detailLevel == 0) { renderHomeScreen(); return; }
+        if (activeTab == TAB_NOW_PLAYING) { renderNowPlaying(); return; }
         showingNowPlaying = false;
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -586,14 +693,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.setPadding(dp(8), 0, dp(8), 0);
         toolbar.setBackgroundColor(COLOR_DARK);
-        toolbarBack = text(detailLevel > 0 ? "‹" : "♫", 25, 0xffffffff, true);
+        toolbarBack = text("‹", 25, 0xffffffff, true);
         toolbarBack.setGravity(Gravity.CENTER);
         toolbarBack.setFocusable(false);
         toolbarBack.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { onBackPressed(); }
         });
         toolbar.addView(toolbarBack, new LinearLayout.LayoutParams(dp(36), -1));
-        toolbarTitle = text(detailLevel > 0 ? detailTitle : "נגן מוזיקה", 18, 0xffffffff, true);
+        toolbarTitle = text(detailTitle, 18, 0xffffffff, true);
         toolbarTitle.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, -1, 1);
         toolbar.addView(toolbarTitle, titleParams);
@@ -607,21 +714,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         });
         toolbar.addView(refresh, new LinearLayout.LayoutParams(dp(36), -1));
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(36)));
-
-        if (detailLevel == 0) {
-            tabsScroll = new HorizontalScrollView(this);
-            tabsScroll.setHorizontalScrollBarEnabled(false);
-            tabsScroll.setBackgroundColor(0xffdddddd);
-            tabsRow = new LinearLayout(this);
-            tabsRow.setOrientation(LinearLayout.HORIZONTAL);
-            addTab("שירים", TAB_SONGS);
-            addTab("אמנים", TAB_ARTISTS);
-            addTab("אלבומים", TAB_ALBUMS);
-            addTab("פלייליסטים", TAB_PLAYLISTS);
-            addTab("מתנגן עכשיו", TAB_NOW_PLAYING);
-            tabsScroll.addView(tabsRow);
-            root.addView(tabsScroll, new LinearLayout.LayoutParams(-1, dp(34)));
-        }
 
         listView = new ListView(this);
         listView.setCacheColorHint(0x00000000);
@@ -1221,7 +1313,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArt.setBackgroundDrawable(roundRect(0xffe5e8eb, 15));
         nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.88f);
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.68f);
         artParams.topMargin = dp(8);
         artParams.bottomMargin = dp(2);
         content.addView(artHolder, artParams);
@@ -1236,7 +1328,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowAlbum = text(currentSong == null ? "" : currentSong.album, 12, COLOR_SUB, false);
         nowAlbum.setGravity(Gravity.CENTER);
         content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, dp(14)));
-        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.12f));
+        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.32f));
 
         LinearLayout timeline = new LinearLayout(this);
         timeline.setOrientation(LinearLayout.VERTICAL);
@@ -1245,6 +1337,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration));
         seekBar.setProgress(player != null ? safePosition() : 0);
         seekBar.setPadding(dp(8), dp(2), dp(8), dp(2));
+        seekBar.setProgressDrawable(createTimelineTrack());
+        seekBar.setThumb(createTimelineThumb());
+        seekBar.setThumbOffset(dp(8));
 
         // Use the platform SeekBar drawable. Custom LayerDrawables can behave
         // inconsistently on older vendor Android 4.4 builds.
@@ -1266,10 +1361,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         durationText.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         times.addView(durationText, new LinearLayout.LayoutParams(0, dp(16), 1));
         LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(-1, dp(18));
-        timeParams.topMargin = dp(12);
+        timeParams.topMargin = dp(9);
         timeline.addView(times, timeParams);
-        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(62));
-        timelineParams.topMargin = dp(2);
+        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(72));
+        timelineParams.topMargin = dp(0);
         content.addView(timeline, timelineParams);
 
         LinearLayout controls = new LinearLayout(this);
@@ -1282,14 +1377,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(previous, -1, new Runnable() {
             @Override public void run() { playPrevious(); }
         });
-        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(52), dp(52));
+        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         sideParams.rightMargin = dp(18);
         controls.addView(previous, sideParams);
 
         nowPlayButton = new TransportButton(this, TransportButton.TYPE_PLAY);
         nowPlayButton.setPlaying(isPlaying());
         nowPlayButton.setContentDescription("הפעל או השהה");
-        nowPlayButton.setBackgroundDrawable(stateRoundRect(COLOR_ACCENT, 0xff0095a5, 30));
+        nowPlayButton.setBackgroundDrawable(modernPlayBackground());
         nowPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
@@ -1301,7 +1396,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(next, 1, new Runnable() {
             @Override public void run() { playNext(true); }
         });
-        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(52), dp(52));
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(46), dp(46));
         nextParams.leftMargin = dp(18);
         controls.addView(next, nextParams);
         content.addView(controls, new LinearLayout.LayoutParams(-1, dp(64)));
@@ -1341,71 +1436,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
      * starts seeking after 450 ms and repeats until the finger is released.
      */
     private void installHoldSeek(final View control, final int direction, final Runnable shortClick) {
-        final boolean[] fingerDown = new boolean[]{false};
-        final boolean[] didSeek = new boolean[]{false};
-        final Runnable beginSeeking = new Runnable() {
-            @Override public void run() {
-                if (!fingerDown[0]) return;
-                didSeek[0] = true;
-                seekDirection = direction;
-                seekBy(direction * 2000);
-                handler.removeCallbacks(heldSeekRunnable);
-                handler.postDelayed(heldSeekRunnable, 350L);
-            }
-        };
-
-        // One touch handler owns the entire gesture. A tap changes track;
-        // a hold seeks and can never fall through to the track-change action.
-        control.setClickable(true);
-        control.setLongClickable(false);
-        control.setOnTouchListener(new View.OnTouchListener() {
-            @Override public boolean onTouch(View view, MotionEvent event) {
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        fingerDown[0] = true;
-                        didSeek[0] = false;
-                        seekDirection = 0;
-                        handler.removeCallbacks(heldSeekRunnable);
-                        handler.removeCallbacks(beginSeeking);
-                        view.setPressed(true);
-                        handler.postDelayed(beginSeeking, 500L);
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                        if (!fingerDown[0]) return true;
-                        fingerDown[0] = false;
-                        handler.removeCallbacks(beginSeeking);
-                        view.setPressed(false);
-                        if (didSeek[0]) {
-                            seekDirection = 0;
-                            handler.removeCallbacks(heldSeekRunnable);
-                        } else {
-                            seekDirection = 0;
-                            handler.removeCallbacks(heldSeekRunnable);
-                            view.performClick();
-                            if (shortClick != null) shortClick.run();
-                        }
-                        return true;
-                    case MotionEvent.ACTION_CANCEL:
-                        fingerDown[0] = false;
-                        handler.removeCallbacks(beginSeeking);
-                        seekDirection = 0;
-                        handler.removeCallbacks(heldSeekRunnable);
-                        view.setPressed(false);
-                        return true;
-                    case MotionEvent.ACTION_MOVE:
-                        if (event.getX() < -dp(12) || event.getX() > view.getWidth() + dp(12)
-                                || event.getY() < -dp(12) || event.getY() > view.getHeight() + dp(12)) {
-                            fingerDown[0] = false;
-                            handler.removeCallbacks(beginSeeking);
-                            seekDirection = 0;
-                            handler.removeCallbacks(heldSeekRunnable);
-                            view.setPressed(false);
-                        }
-                        return true;
-                }
-                return true;
-            }
-        });
+        if (!(control instanceof TransportButton)) return;
+        ((TransportButton) control).setSeekGesture(direction, shortClick);
     }
 
     private void seekBy(int deltaMs) {
@@ -1885,10 +1917,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) { playPrevious(); return true; }
         if (keyCode == KeyEvent.KEYCODE_BACK) { onBackPressed(); return true; }
         if (!showingNowPlaying && detailLevel == 0 && (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
-            int delta = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1;
-            int nextTab = (activeTab + delta + 5) % 5;
-            switchToTab(nextTab);
-            return true;
+            return super.onKeyDown(keyCode, event);
         }
         if (showingNowPlaying) {
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { playPrevious(); return true; }
@@ -1995,6 +2024,46 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
     }
 
+    private Drawable createTimelineTrack() {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(0xffd9e0e3);
+        background.setCornerRadius(dp(4));
+        GradientDrawable filled = new GradientDrawable();
+        filled.setColor(0xff00aabd);
+        filled.setCornerRadius(dp(4));
+        ClipDrawable clipped = new ClipDrawable(filled, Gravity.LEFT, ClipDrawable.HORIZONTAL);
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{background, clipped});
+        layers.setId(0, android.R.id.background);
+        layers.setId(1, android.R.id.progress);
+        layers.setLayerInset(0, 0, dp(2), 0, dp(2));
+        layers.setLayerInset(1, 0, dp(2), 0, dp(2));
+        return layers;
+    }
+
+    private Drawable createTimelineThumb() {
+        GradientDrawable thumb = new GradientDrawable();
+        thumb.setShape(GradientDrawable.OVAL);
+        thumb.setColor(0xffffffff);
+        thumb.setStroke(dp(2), 0xff008f9f);
+        thumb.setSize(dp(16), dp(16));
+        return thumb;
+    }
+
+    private Drawable modernPlayBackground() {
+        GradientDrawable normal = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xff24c7d4, 0xff00899b});
+        normal.setShape(GradientDrawable.OVAL);
+        normal.setStroke(dp(1), 0xff8be4e9);
+        GradientDrawable pressed = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0xff0098a8, 0xff006b7a});
+        pressed.setShape(GradientDrawable.OVAL);
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        states.addState(new int[]{android.R.attr.state_focused}, pressed);
+        states.addState(new int[]{}, normal);
+        return states;
+    }
+
     private StateListDrawable stateRoundRect(int normalColor, int pressedColor, int radiusDp) {
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_pressed}, roundRect(pressedColor, radiusDp));
@@ -2012,12 +2081,31 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         private final int type;
         private final Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private boolean playing = false;
+        private boolean fingerDown = false;
+        private boolean longSeeking = false;
+        private int holdDirection = 0;
+        private Runnable tapAction;
+        private final Runnable startSeek = new Runnable() {
+            @Override public void run() {
+                if (!fingerDown || holdDirection == 0) return;
+                longSeeking = true;
+                seekDirection = holdDirection;
+                seekBy(holdDirection * 1000);
+                handler.removeCallbacks(heldSeekRunnable);
+                handler.postDelayed(heldSeekRunnable, 180L);
+            }
+        };
 
         TransportButton(Activity context, int type) {
             super(context);
             this.type = type;
             setFocusable(true);
             setClickable(true);
+        }
+
+        void setSeekGesture(int direction, Runnable tap) {
+            holdDirection = direction;
+            tapAction = tap;
         }
 
         void setPlaying(boolean value) {
@@ -2027,34 +2115,91 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             }
         }
 
+        @Override public boolean onTouchEvent(MotionEvent event) {
+            if (type == TYPE_PLAY || holdDirection == 0) return super.onTouchEvent(event);
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    fingerDown = true;
+                    longSeeking = false;
+                    setPressed(true);
+                    handler.removeCallbacks(startSeek);
+                    handler.removeCallbacks(heldSeekRunnable);
+                    seekDirection = 0;
+                    handler.postDelayed(startSeek, 450L);
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (event.getX() < -dp(14) || event.getX() > getWidth() + dp(14)
+                            || event.getY() < -dp(14) || event.getY() > getHeight() + dp(14)) {
+                        cancelSeekGesture();
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    if (!fingerDown) return true;
+                    fingerDown = false;
+                    handler.removeCallbacks(startSeek);
+                    setPressed(false);
+                    if (longSeeking) {
+                        seekDirection = 0;
+                        handler.removeCallbacks(heldSeekRunnable);
+                    } else if (tapAction != null) {
+                        performClick();
+                        tapAction.run();
+                    }
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    cancelSeekGesture();
+                    return true;
+            }
+            return true;
+        }
+
+        private void cancelSeekGesture() {
+            fingerDown = false;
+            longSeeking = false;
+            handler.removeCallbacks(startSeek);
+            seekDirection = 0;
+            handler.removeCallbacks(heldSeekRunnable);
+            setPressed(false);
+        }
+
+        @Override public boolean performClick() {
+            super.performClick();
+            return true;
+        }
+
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            float unit = Math.min(getWidth(), getHeight()) * 0.62f;
-            iconPaint.setColor(type == TYPE_PLAY ? 0xffffffff : 0xff27343b);
+            float unit = Math.min(getWidth(), getHeight()) * (type == TYPE_PLAY ? 0.68f : 0.53f);
+            iconPaint.setColor(type == TYPE_PLAY ? 0xffffffff : 0xff34434a);
             iconPaint.setStyle(Paint.Style.FILL);
-            iconPaint.setStrokeWidth(dp(2.4f));
+            iconPaint.setStrokeWidth(dp(2.1f));
             iconPaint.setStrokeCap(Paint.Cap.ROUND);
             iconPaint.setStrokeJoin(Paint.Join.ROUND);
 
             if (type == TYPE_PLAY) {
                 if (playing) {
-                    float barWidth = unit * 0.19f;
-                    float barHeight = unit * 0.62f;
-                    canvas.drawRoundRect(new RectF(cx - unit * 0.34f, cy - barHeight / 2f,
-                            cx - unit * 0.34f + barWidth, cy + barHeight / 2f),
-                            dp(1.5f), dp(1.5f), iconPaint);
-                    canvas.drawRoundRect(new RectF(cx + unit * 0.15f, cy - barHeight / 2f,
-                            cx + unit * 0.15f + barWidth, cy + barHeight / 2f),
-                            dp(1.5f), dp(1.5f), iconPaint);
+                    float barWidth = unit * 0.18f;
+                    float barHeight = unit * 0.58f;
+                    canvas.drawRoundRect(new RectF(cx - unit * 0.30f, cy - barHeight / 2f,
+                            cx - unit * 0.30f + barWidth, cy + barHeight / 2f),
+                            dp(2), dp(2), iconPaint);
+                    canvas.drawRoundRect(new RectF(cx + unit * 0.12f, cy - barHeight / 2f,
+                            cx + unit * 0.12f + barWidth, cy + barHeight / 2f),
+                            dp(2), dp(2), iconPaint);
                 } else {
-                    Path triangle = new Path();
-                    triangle.moveTo(cx - unit * 0.24f, cy - unit * 0.42f);
-                    triangle.lineTo(cx + unit * 0.42f, cy);
-                    triangle.lineTo(cx - unit * 0.24f, cy + unit * 0.42f);
-                    triangle.close();
-                    canvas.drawPath(triangle, iconPaint);
+                    Path play = new Path();
+                    play.moveTo(cx - unit * 0.22f, cy - unit * 0.43f);
+                    play.quadTo(cx - unit * 0.29f, cy - unit * 0.48f, cx - unit * 0.29f, cy - unit * 0.34f);
+                    play.lineTo(cx - unit * 0.29f, cy + unit * 0.34f);
+                    play.quadTo(cx - unit * 0.29f, cy + unit * 0.48f, cx - unit * 0.15f, cy + unit * 0.40f);
+                    play.lineTo(cx + unit * 0.40f, cy + unit * 0.08f);
+                    play.quadTo(cx + unit * 0.54f, cy, cx + unit * 0.40f, cy - unit * 0.08f);
+                    play.lineTo(cx - unit * 0.15f, cy - unit * 0.40f);
+                    play.quadTo(cx - unit * 0.19f, cy - unit * 0.44f, cx - unit * 0.22f, cy - unit * 0.43f);
+                    play.close();
+                    canvas.drawPath(play, iconPaint);
                 }
                 return;
             }
@@ -2062,21 +2207,21 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             Path triangle = new Path();
             float halfHeight = unit * 0.39f;
             if (type == TYPE_PREVIOUS) {
-                triangle.moveTo(cx + unit * 0.22f, cy - halfHeight);
-                triangle.lineTo(cx - unit * 0.34f, cy);
-                triangle.lineTo(cx + unit * 0.22f, cy + halfHeight);
+                triangle.moveTo(cx + unit * 0.20f, cy - halfHeight);
+                triangle.lineTo(cx - unit * 0.32f, cy);
+                triangle.lineTo(cx + unit * 0.20f, cy + halfHeight);
                 triangle.close();
                 canvas.drawPath(triangle, iconPaint);
-                canvas.drawRoundRect(new RectF(cx + unit * 0.36f, cy - halfHeight,
-                        cx + unit * 0.49f, cy + halfHeight), dp(1.2f), dp(1.2f), iconPaint);
+                canvas.drawRoundRect(new RectF(cx + unit * 0.34f, cy - halfHeight,
+                        cx + unit * 0.47f, cy + halfHeight), dp(1.2f), dp(1.2f), iconPaint);
             } else {
-                triangle.moveTo(cx - unit * 0.22f, cy - halfHeight);
-                triangle.lineTo(cx + unit * 0.34f, cy);
-                triangle.lineTo(cx - unit * 0.22f, cy + halfHeight);
+                triangle.moveTo(cx - unit * 0.20f, cy - halfHeight);
+                triangle.lineTo(cx + unit * 0.32f, cy);
+                triangle.lineTo(cx - unit * 0.20f, cy + halfHeight);
                 triangle.close();
                 canvas.drawPath(triangle, iconPaint);
-                canvas.drawRoundRect(new RectF(cx - unit * 0.49f, cy - halfHeight,
-                        cx - unit * 0.36f, cy + halfHeight), dp(1.2f), dp(1.2f), iconPaint);
+                canvas.drawRoundRect(new RectF(cx - unit * 0.47f, cy - halfHeight,
+                        cx - unit * 0.34f, cy + halfHeight), dp(1.2f), dp(1.2f), iconPaint);
             }
         }
     }
