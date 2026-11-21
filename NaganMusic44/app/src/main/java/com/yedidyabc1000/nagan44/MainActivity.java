@@ -30,6 +30,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
@@ -100,6 +101,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int MIX_SUPER = 107;
     private static final int SUPER_MIX_MIN_TRACKS = 10;
     private static final int SUPER_MIX_MIN_PLAYS = 30;
+    private static final long MIN_COUNTED_PLAY_MS = 60000L;
+    private static final long CROSSFADE_MAX_MS = 4000L;
     private static final int REQUEST_IMPORT_PLAYLIST = 411;
     private static final int CUSTOM_PLAYLIST_BASE = 1000;
     private static final int COLOR_DARK = 0xff252525;
@@ -133,6 +136,18 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int tabLoadToken = 0;
 
     private MediaPlayer player;
+    private MediaPlayer nextPlayer;
+    private Song nextSong;
+    private int nextQueueIndex = -1;
+    private boolean nextPlayerPrepared = false;
+    private boolean crossfadeEnabledForQueue = false;
+    private boolean crossfadeActive = false;
+    private long crossfadeDurationMs = CROSSFADE_MAX_MS;
+    private long crossfadeElapsedMs = 0L;
+    private long crossfadeLastTickRealtime = 0L;
+    private long currentTrackListenMs = 0L;
+    private long lastListenSampleRealtime = 0L;
+    private boolean currentTrackCounted = false;
     private Song currentSong;
     private int queueIndex = -1;
     private long forcedNextSongId = -1L;
@@ -184,8 +199,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             try {
                 heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
                         heldSeekPosition + seekDirection * 2500));
-                player.seekTo(heldSeekPosition);
-                if (seekBar != null) seekBar.setProgress(heldSeekPosition);
+                cancelCrossfadeForSeek();
+            player.seekTo(heldSeekPosition);
+                if (seekBar != null) updateSeekBarTimeline(heldSeekPosition, heldSeekDuration);
                 if (elapsedText != null) elapsedText.setText(formatTime(heldSeekPosition));
             } catch (IllegalStateException ignored) { }
             if (seekDirection != 0) handler.postDelayed(this, 450L);
@@ -200,21 +216,51 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
     };
 
+    private final Runnable crossfadeRunnable = new Runnable() {
+        @Override public void run() {
+            if (!crossfadeActive || player == null || nextPlayer == null) return;
+            long now = SystemClock.elapsedRealtime();
+            if (isMediaPlayerPlaying(player) && isMediaPlayerPlaying(nextPlayer)) {
+                if (crossfadeLastTickRealtime > 0L) {
+                    long delta = now - crossfadeLastTickRealtime;
+                    if (delta > 0L) crossfadeElapsedMs += Math.min(150L, delta);
+                }
+            }
+            crossfadeLastTickRealtime = now;
+            float fraction = crossfadeDurationMs <= 0L ? 1f
+                    : Math.min(1f, crossfadeElapsedMs / (float) crossfadeDurationMs);
+            double angle = fraction * Math.PI / 2.0;
+            try {
+                float oldVolume = (float) Math.cos(angle);
+                float newVolume = (float) Math.sin(angle);
+                player.setVolume(oldVolume, oldVolume);
+                nextPlayer.setVolume(newVolume, newVolume);
+            } catch (IllegalStateException error) {
+                Log.w(TAG, "Crossfade volume update failed", error);
+                cancelPreloadedPlayer();
+                return;
+            }
+            if (fraction >= 1f) finishCrossfade();
+            else handler.postDelayed(this, 50L);
+        }
+    };
+
     private final Runnable progressRunnable = new Runnable() {
         @Override public void run() {
-            if (player != null && player.isPlaying()) {
+            if (isPlaying() && playerPrepared) {
                 int position = 0;
                 int duration = 0;
                 try {
                     position = player.getCurrentPosition();
                     duration = player.getDuration();
                 } catch (IllegalStateException ignored) { }
-                if (seekBar != null && !userSeeking) {
-                    seekBar.setMax(Math.max(1, duration));
-                    seekBar.setProgress(position);
-                }
+                updateListenTracker();
+                if (seekBar != null && !userSeeking) updateSeekBarTimeline(position, duration);
                 if (elapsedText != null) elapsedText.setText(formatTime(position));
                 if (durationText != null) durationText.setText(formatTime(duration));
+                beginCrossfadeIfNeeded(position, duration);
+            } else {
+                lastListenSampleRealtime = 0L;
             }
             handler.postDelayed(this, 500);
         }
@@ -1352,7 +1398,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 if (e != null && e.type == Entry.TYPE_SONG && e.song != null) playQueue.add(e.song);
             }
             int index = playQueue.indexOf(entry.song);
-            if (index >= 0) startTrack(playQueue, index);
+            if (index >= 0) startTrack(playQueue, index, detailLevel > 0);
         } else if (entry.type == Entry.TYPE_ARTIST) {
             ArrayList<Song> artistSongs = entry.songs == null
                     ? new ArrayList<Song>() : new ArrayList<Song>(entry.songs);
@@ -1417,6 +1463,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         int insertAt = Math.min(queue.size(), queueIndex + 1);
         queue.add(insertAt, song);
         forcedNextSongId = song.id;
+        cancelPreloadedPlayer();
+        prepareNextPlayer();
         Toast.makeText(this, "השיר נוסף אחרי השיר הנוכחי", Toast.LENGTH_SHORT).show();
     }
 
@@ -1777,12 +1825,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         timeline.setOrientation(LinearLayout.VERTICAL);
         timeline.setPadding(dp(8), 0, dp(8), 0);
         seekBar = new SeekBar(this);
+        seekBar.setProgressDrawable(new TimelineProgressDrawable());
         seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration));
         seekBar.setProgress(player != null ? safePosition() : 0);
         seekBar.setPadding(dp(8), dp(8), dp(8), dp(8));
         seekBar.setMinimumHeight(dp(38));
         if (Build.VERSION.SDK_INT >= 17) seekBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        seekBar.setProgressDrawable(new TimelineProgressDrawable());
         seekBar.setThumb(createTimelineThumb());
         seekBar.setThumbOffset(dp(8));
 
@@ -1793,9 +1841,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; }
             @Override public void onStopTrackingTouch(SeekBar bar) {
                 userSeeking = false;
-                if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { }
+                if (player != null) {
+                    cancelCrossfadeForSeek();
+                    try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { }
+                }
             }
         });
+        updateSeekBarTimeline(safePosition(), safeDuration());
         timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(38)));
         LinearLayout times = new LinearLayout(this);
         times.setOrientation(LinearLayout.HORIZONTAL);
@@ -1919,8 +1971,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             seekDirection = direction;
             heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
                     heldSeekPosition + direction * 2500));
+            cancelCrossfadeForSeek();
             player.seekTo(heldSeekPosition);
-            if (seekBar != null) seekBar.setProgress(heldSeekPosition);
+            if (seekBar != null) updateSeekBarTimeline(heldSeekPosition, heldSeekDuration);
             if (elapsedText != null) elapsedText.setText(formatTime(heldSeekPosition));
             handler.removeCallbacks(heldSeekRunnable);
             handler.postDelayed(heldSeekRunnable, 450L);
@@ -1939,11 +1992,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             handler.removeCallbacks(heldSeekRunnable);
             heldSeekDuration = duration;
             heldSeekPosition = target;
+            cancelCrossfadeForSeek();
             player.seekTo(target);
-            if (seekBar != null) {
-                seekBar.setMax(Math.max(1, duration));
-                seekBar.setProgress(target);
-            }
+            if (seekBar != null) updateSeekBarTimeline(target, duration);
             if (elapsedText != null) elapsedText.setText(formatTime(target));
             if (durationText != null) durationText.setText(formatTime(duration));
         } catch (IllegalStateException error) {
@@ -1956,8 +2007,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         try {
             int duration = heldSeekDuration > 0 ? heldSeekDuration : player.getDuration();
             int target = Math.max(0, Math.min(duration, requestedPosition));
+            cancelCrossfadeForSeek();
             player.seekTo(target);
-            if (seekBar != null) seekBar.setProgress(target);
+            if (seekBar != null) updateSeekBarTimeline(target, duration);
             if (elapsedText != null) elapsedText.setText(formatTime(target));
         } catch (IllegalStateException ignored) { }
     }
@@ -2528,8 +2580,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void startTrack(ArrayList<Song> songs, int index) {
+        startTrack(songs, index, false);
+    }
+
+    private void startTrack(ArrayList<Song> songs, int index, boolean enableCrossfade) {
         if (songs == null || songs.size() == 0 || index < 0 || index >= songs.size()) return;
         forcedNextSongId = -1L;
+        crossfadeEnabledForQueue = enableCrossfade;
         queue.clear();
         queue.addAll(songs);
         queueIndex = index;
@@ -2585,6 +2642,197 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             Toast.makeText(this, "לא ניתן להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
         }
         updatePlayerButtons();
+    }
+
+    private void resetListenTracker() {
+        currentTrackListenMs = 0L;
+        lastListenSampleRealtime = isPlaying() ? SystemClock.elapsedRealtime() : 0L;
+        currentTrackCounted = false;
+    }
+
+    private void updateListenTracker() {
+        if (currentSong == null || currentTrackCounted || !isPlaying()) {
+            lastListenSampleRealtime = 0L;
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (lastListenSampleRealtime > 0L) {
+            long delta = now - lastListenSampleRealtime;
+            if (delta > 0L) currentTrackListenMs += Math.min(1500L, delta);
+        }
+        lastListenSampleRealtime = now;
+        if (currentTrackListenMs >= MIN_COUNTED_PLAY_MS) {
+            currentTrackCounted = true;
+            recordPlay(currentSong);
+        }
+    }
+
+    private boolean isMediaPlayerPlaying(MediaPlayer candidate) {
+        try { return candidate != null && candidate.isPlaying(); }
+        catch (IllegalStateException ignored) { return false; }
+    }
+
+    private int findNextQueueIndex(boolean manual) {
+        if (queue.size() == 0) return -1;
+        int next = -1;
+        if (forcedNextSongId >= 0L) {
+            for (int i = Math.max(0, queueIndex + 1); i < queue.size(); i++) {
+                if (queue.get(i).id == forcedNextSongId) { next = i; break; }
+            }
+        }
+        if (next < 0 && shuffle && queue.size() > 1) {
+            next = queueIndex;
+            while (next == queueIndex) next = random.nextInt(queue.size());
+        } else if (next < 0) {
+            next = queueIndex + 1;
+        }
+        if (next >= queue.size()) {
+            if (repeatMode == 1 || manual) next = 0;
+            else return -1;
+        }
+        return next >= 0 && next < queue.size() ? next : -1;
+    }
+
+    private void prepareNextPlayer() {
+        if (!crossfadeEnabledForQueue || repeatMode == 2 || queue.size() < 2
+                || player == null || !playerPrepared || nextPlayer != null) return;
+        int index = findNextQueueIndex(false);
+        if (index < 0 || index == queueIndex) return;
+        final Song song = queue.get(index);
+        if (song == null || song.id == (currentSong == null ? -1L : currentSong.id)) return;
+
+        final MediaPlayer preload = new MediaPlayer();
+        nextPlayer = preload;
+        nextSong = song;
+        nextQueueIndex = index;
+        nextPlayerPrepared = false;
+        try {
+            preload.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            preload.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+                @Override public void onPrepared(MediaPlayer mp) {
+                    if (mp != nextPlayer) return;
+                    nextPlayerPrepared = true;
+                    try { mp.setVolume(0f, 0f); }
+                    catch (IllegalStateException error) {
+                        Log.w(TAG, "Could not prepare crossfade volume", error);
+                        cancelPreloadedPlayer();
+                    }
+                }
+            });
+            preload.setOnCompletionListener(this);
+            preload.setOnErrorListener(this);
+            if (song.uri != null) preload.setDataSource(this, song.uri);
+            else if (song.path != null) preload.setDataSource(song.path);
+            else throw new java.io.IOException("Missing next-track location");
+            preload.prepareAsync();
+        } catch (Exception error) {
+            Log.w(TAG, "Could not preload next track for crossfade", error);
+            cancelPreloadedPlayer();
+        }
+    }
+
+    private void cancelPreloadedPlayer() {
+        handler.removeCallbacks(crossfadeRunnable);
+        crossfadeActive = false;
+        crossfadeElapsedMs = 0L;
+        crossfadeLastTickRealtime = 0L;
+        if (player != null) {
+            try { player.setVolume(1f, 1f); } catch (IllegalStateException ignored) { }
+        }
+        MediaPlayer old = nextPlayer;
+        nextPlayer = null;
+        nextSong = null;
+        nextQueueIndex = -1;
+        nextPlayerPrepared = false;
+        if (old != null) {
+            try {
+                old.setOnPreparedListener(null);
+                old.setOnCompletionListener(null);
+                old.setOnErrorListener(null);
+            } catch (Exception ignored) { }
+            try { old.reset(); } catch (Exception ignored) { }
+            try { old.release(); } catch (Exception ignored) { }
+        }
+    }
+
+    private void beginCrossfadeIfNeeded(int position, int duration) {
+        if (!crossfadeEnabledForQueue || !nextPlayerPrepared || crossfadeActive
+                || player == null || nextPlayer == null || !isMediaPlayerPlaying(player)) return;
+        int nextDuration = 0;
+        try { nextDuration = nextPlayer.getDuration(); } catch (IllegalStateException ignored) { }
+        if (nextDuration <= 0 && nextSong != null) nextDuration = (int)Math.min(Integer.MAX_VALUE, nextSong.duration);
+        if (duration <= 0 || nextDuration <= 0) return;
+        long fade = Math.min(CROSSFADE_MAX_MS, Math.min(duration / 2L, nextDuration / 2L));
+        if (fade < 750L || duration - position > fade) return;
+        try {
+            crossfadeDurationMs = fade;
+            crossfadeElapsedMs = 0L;
+            crossfadeLastTickRealtime = SystemClock.elapsedRealtime();
+            nextPlayer.setVolume(0f, 0f);
+            nextPlayer.start();
+            crossfadeActive = true;
+            handler.removeCallbacks(crossfadeRunnable);
+            handler.post(crossfadeRunnable);
+        } catch (IllegalStateException error) {
+            Log.w(TAG, "Could not start crossfade", error);
+            cancelPreloadedPlayer();
+        }
+    }
+
+    private void finishCrossfade() {
+        if (!crossfadeActive || nextPlayer == null || !nextPlayerPrepared) return;
+        promotePreloadedPlayer(true);
+    }
+
+    private void promotePreloadedPlayer(boolean alreadyStarted) {
+        if (nextPlayer == null || !nextPlayerPrepared || nextSong == null || nextQueueIndex < 0) return;
+        handler.removeCallbacks(crossfadeRunnable);
+        MediaPlayer old = player;
+        MediaPlayer promoted = nextPlayer;
+        Song promotedSong = nextSong;
+        int promotedIndex = nextQueueIndex;
+        nextPlayer = null;
+        nextSong = null;
+        nextQueueIndex = -1;
+        nextPlayerPrepared = false;
+        crossfadeActive = false;
+        crossfadeElapsedMs = 0L;
+        crossfadeLastTickRealtime = 0L;
+
+        player = promoted;
+        currentSong = promotedSong;
+        queueIndex = promotedIndex;
+        if (forcedNextSongId == promotedSong.id) forcedNextSongId = -1L;
+        playerPrepared = true;
+        try {
+            promoted.setVolume(1f, 1f);
+            if (!alreadyStarted) promoted.start();
+        } catch (IllegalStateException error) {
+            Log.e(TAG, "Could not start preloaded track", error);
+            try { promoted.release(); } catch (Exception ignored) { }
+            player = null;
+            playerPrepared = false;
+            return;
+        }
+        if (old != null) {
+            try {
+                old.setOnPreparedListener(null);
+                old.setOnCompletionListener(null);
+                old.setOnErrorListener(null);
+            } catch (Exception ignored) { }
+            try { old.reset(); } catch (Exception ignored) { }
+            try { old.release(); } catch (Exception ignored) { }
+        }
+        resetListenTracker();
+        if (activeTab == TAB_NOW_PLAYING || showingNowPlaying) renderNowPlaying();
+        else { updateMiniPlayerText(); updatePlayerButtons(); }
+        prepareNextPlayer();
+    }
+
+    private void cancelCrossfadeForSeek() {
+        if (!crossfadeActive) return;
+        cancelPreloadedPlayer();
+        prepareNextPlayer();
     }
 
     /** Minimal controls-only fallback: playback must not depend on artwork rendering. */
@@ -2648,9 +2896,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     @Override public void onPrepared(MediaPlayer mp) {
         if (mp == null || mp != player) return;
         playerPrepared = true;
+        resetListenTracker();
         try {
+            mp.setVolume(1f, 1f);
             mp.start();
-            if (currentSong != null) recordPlay(currentSong);
+            prepareNextPlayer();
         } catch (RuntimeException error) {
             Log.e(TAG, "MediaPlayer start failed", error);
             Toast.makeText(this, "המכשיר לא הצליח להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
@@ -2659,6 +2909,18 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     @Override public void onCompletion(MediaPlayer mp) {
+        if (mp == nextPlayer) {
+            if (crossfadeActive) {
+                finishCrossfade();
+                if (mp == player) playNext(false);
+            }
+            return;
+        }
+        if (mp != player) return;
+        if (crossfadeActive && nextPlayerPrepared) {
+            finishCrossfade();
+            return;
+        }
         if (repeatMode == 2 && player != null) {
             try { player.seekTo(0); player.start(); return; } catch (Exception ignored) { }
         }
@@ -2667,31 +2929,33 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     @Override public boolean onError(MediaPlayer mp, int what, int extra) {
         Log.e(TAG, "MediaPlayer error: what=" + what + ", extra=" + extra);
-        Toast.makeText(this, "שגיאה בהשמעת השיר (" + what + "/" + extra + ")", Toast.LENGTH_LONG).show();
-        if (mp == player) releasePlayer();
-        updatePlayerButtons();
+        if (mp == nextPlayer) {
+            cancelPreloadedPlayer();
+            return true;
+        }
+        if (mp == player) {
+            Toast.makeText(this, "שגיאה בהשמעת השיר (" + what + "/" + extra + ")", Toast.LENGTH_LONG).show();
+            releasePlayer();
+            updatePlayerButtons();
+        }
         return true;
     }
 
     private void playNext(boolean manual) {
         if (queue.size() == 0) return;
-        int next = -1;
-        if (forcedNextSongId >= 0) {
-            for (int i = Math.max(0, queueIndex + 1); i < queue.size(); i++) {
-                if (queue.get(i).id == forcedNextSongId) { next = i; break; }
-            }
-            forcedNextSongId = -1L;
+        if (nextPlayer != null && nextPlayerPrepared && nextQueueIndex >= 0) {
+            boolean alreadyStarted = crossfadeActive;
+            promotePreloadedPlayer(alreadyStarted);
+            return;
         }
-        if (next < 0 && shuffle && queue.size() > 1) {
-            next = queueIndex;
-            while (next == queueIndex) next = random.nextInt(queue.size());
-        } else if (next < 0) {
-            next = queueIndex + 1;
+        cancelPreloadedPlayer();
+        int next = findNextQueueIndex(manual);
+        if (next < 0) {
+            releasePlayer();
+            updatePlayerButtons();
+            return;
         }
-        if (next >= queue.size()) {
-            if (repeatMode == 1 || manual) next = 0;
-            else { releasePlayer(); updatePlayerButtons(); return; }
-        }
+        forcedNextSongId = -1L;
         queueIndex = next;
         startCurrentTrack();
     }
@@ -2712,8 +2976,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             return;
         }
         try {
-            if (player.isPlaying()) player.pause();
-            else player.start();
+            if (player.isPlaying()) {
+                player.pause();
+                if (crossfadeActive && nextPlayer != null && isMediaPlayerPlaying(nextPlayer)) nextPlayer.pause();
+            } else {
+                player.start();
+                if (crossfadeActive && nextPlayer != null && !isMediaPlayerPlaying(nextPlayer)) nextPlayer.start();
+            }
         } catch (IllegalStateException ignored) { }
         updatePlayerButtons();
     }
@@ -2728,8 +2997,32 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         catch (Exception error) { return 0; }
     }
 
+    private int safeDuration() {
+        try { if (player != null) return Math.max(1, player.getDuration()); }
+        catch (Exception ignored) { }
+        return currentSong == null ? 1 : (int)Math.max(1L, Math.min(Integer.MAX_VALUE, currentSong.duration));
+    }
+
+    private void updateSeekBarTimeline(int requestedPosition, int requestedDuration) {
+        if (seekBar == null) return;
+        int max = Math.max(1, requestedDuration);
+        int position = Math.max(0, Math.min(max, requestedPosition));
+        seekBar.setMax(max);
+        seekBar.setProgress(position);
+        Drawable progress = seekBar.getProgressDrawable();
+        if (progress != null) {
+            progress.setLevel((int)(position * 10000L / max));
+            progress.invalidateSelf();
+        }
+        seekBar.invalidate();
+    }
+
     private void releasePlayer() {
+        cancelPreloadedPlayer();
         playerPrepared = false;
+        currentTrackListenMs = 0L;
+        lastListenSampleRealtime = 0L;
+        currentTrackCounted = false;
         heldSeekPosition = 0;
         heldSeekDuration = 0;
         seekDirection = 0;
@@ -2752,6 +3045,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         int count = getCount(song.id) + 1;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("plays_" + song.id, count).apply();
         browserEntriesCache.remove(TAB_MIXES);
+        browserEntriesCache.remove(TAB_PLAYLISTS);
+        if (activeTab == TAB_MIXES && detailLevel == 0) renderBrowser();
+        if (activeTab == TAB_PLAYLISTS && detailLevel == 0) renderBrowser();
     }
 
     private int getCount(long id) {
