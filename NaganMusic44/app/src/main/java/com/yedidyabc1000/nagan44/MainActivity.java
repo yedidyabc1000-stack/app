@@ -732,7 +732,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         adapter = new BrowserAdapter(new ArrayList<Entry>(visibleEntries));
         LinearLayout browserContent = new LinearLayout(this);
         browserContent.setOrientation(LinearLayout.VERTICAL);
-        if (detailLevel == 0 && activeTab == TAB_SONGS) {
+        if (detailLevel == 1 && activeTab == TAB_SONGS) {
             final EditText search = new EditText(this);
             search.setSingleLine(true);
             search.setFocusable(true);
@@ -2028,15 +2028,17 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         GradientDrawable background = new GradientDrawable();
         background.setColor(0xffd9e0e3);
         background.setCornerRadius(dp(4));
+        background.setSize(dp(1), dp(4));
         GradientDrawable filled = new GradientDrawable();
         filled.setColor(0xff00aabd);
         filled.setCornerRadius(dp(4));
+        filled.setSize(dp(1), dp(4));
         ClipDrawable clipped = new ClipDrawable(filled, Gravity.LEFT, ClipDrawable.HORIZONTAL);
         LayerDrawable layers = new LayerDrawable(new Drawable[]{background, clipped});
         layers.setId(0, android.R.id.background);
         layers.setId(1, android.R.id.progress);
-        layers.setLayerInset(0, 0, dp(2), 0, dp(2));
-        layers.setLayerInset(1, 0, dp(2), 0, dp(2));
+        layers.setLayerInset(0, 0, 0, 0, 0);
+        layers.setLayerInset(1, 0, 0, 0, 0);
         return layers;
     }
 
