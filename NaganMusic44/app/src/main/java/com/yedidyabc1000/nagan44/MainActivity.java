@@ -91,16 +91,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int COLOR_DARK = 0xff252525;
     private static final int COLOR_BAR = 0xff383838;
     private static final int COLOR_ACCENT = 0xff00b9cc;
-    private static final int COLOR_BG = 0xffe3e6e9;
-    private static final int COLOR_ROW = 0xfff0f2f4;
+    private static final int COLOR_BG = 0xffcfd3d7;
+    private static final int COLOR_ROW = 0xffe1e4e7;
     private static final int COLOR_TEXT = 0xff202020;
     private static final int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
     private static final String LIBRARY_CACHE_KEY = "library_cache_v1";
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
-    private static final int COLOR_FOCUS = 0xffc9e5e8;
-    private static final int COLOR_FOCUS_PRESSED = 0xffafd4d9;
+    private static final int COLOR_FOCUS = 0xffb7d2d6;
+    private static final int COLOR_FOCUS_PRESSED = 0xff9dbfc4;
 
     private final ArrayList<Song> allSongs = new ArrayList<Song>();
     private final ArrayList<Song> queue = new ArrayList<Song>();
@@ -163,10 +163,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private final Runnable heldSeekRunnable = new Runnable() {
         @Override public void run() {
             if (seekDirection == 0 || player == null) return;
-            heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
-                    heldSeekPosition + seekDirection * 1200));
-            seekToAbsolute(heldSeekPosition);
-            if (seekDirection != 0) handler.postDelayed(this, 220L);
+            try {
+                heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
+                        heldSeekPosition + seekDirection * 2500));
+                player.seekTo(heldSeekPosition);
+                if (seekBar != null) seekBar.setProgress(heldSeekPosition);
+                if (elapsedText != null) elapsedText.setText(formatTime(heldSeekPosition));
+            } catch (IllegalStateException ignored) { }
+            if (seekDirection != 0) handler.postDelayed(this, 450L);
         }
     };
     private ContentObserver mediaObserver;
@@ -638,14 +642,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         card.setPadding(dp(14), dp(10), dp(14), dp(10));
-        card.setBackgroundDrawable(roundRect(featured ? 0xffd5eaec : COLOR_ROW, 13));
+        card.setBackgroundDrawable(roundRect(COLOR_ROW, 13));
         card.setFocusable(true);
         card.setClickable(true);
 
-        TextView icon = text(symbol, featured ? 28 : 25,
-                featured ? 0xff007f8c : 0xff52616a, true);
+        TextView icon = text(symbol, 25, 0xff52616a, true);
         icon.setGravity(Gravity.CENTER);
-        icon.setBackgroundDrawable(roundRect(featured ? 0xffb2dadd : 0xffe1e6e9, 12));
+        icon.setBackgroundDrawable(roundRect(0xffd2d7db, 12));
         card.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
         LinearLayout labels = new LinearLayout(this);
@@ -667,10 +670,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         labels.addView(count, new LinearLayout.LayoutParams(-1, dp(17)));
         card.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        TextView arrow = text("‹", 26, featured ? 0xff007f8c : 0xff89949a, true);
+        TextView arrow = text("‹", 26, 0xff89949a, true);
         arrow.setGravity(Gravity.CENTER);
         card.addView(arrow, new LinearLayout.LayoutParams(dp(22), -1));
 
+        card.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                v.setBackgroundDrawable(roundRect(hasFocus ? COLOR_FOCUS : COLOR_ROW, 13));
+                v.setSelected(hasFocus);
+            }
+        });
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { action.run(); }
         });
@@ -1457,16 +1466,17 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (player == null) return;
         try {
             int duration = player.getDuration();
-            int position = player.getCurrentPosition();
             if (duration <= 0) return;
             heldSeekDuration = duration;
-            heldSeekPosition = position;
+            heldSeekPosition = player.getCurrentPosition();
             seekDirection = direction;
             heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
-                    heldSeekPosition + direction * 1800));
-            seekToAbsolute(heldSeekPosition);
+                    heldSeekPosition + direction * 2500));
+            player.seekTo(heldSeekPosition);
+            if (seekBar != null) seekBar.setProgress(heldSeekPosition);
+            if (elapsedText != null) elapsedText.setText(formatTime(heldSeekPosition));
             handler.removeCallbacks(heldSeekRunnable);
-            handler.postDelayed(heldSeekRunnable, 220L);
+            handler.postDelayed(heldSeekRunnable, 450L);
         } catch (IllegalStateException ignored) {
             seekDirection = 0;
         }
@@ -1477,8 +1487,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         try {
             int duration = heldSeekDuration > 0 ? heldSeekDuration : player.getDuration();
             int target = Math.max(0, Math.min(duration, requestedPosition));
-            if (Build.VERSION.SDK_INT >= 26) player.seekTo((long) target, MediaPlayer.SEEK_CLOSEST);
-            else player.seekTo(target);
+            player.seekTo(target);
             if (seekBar != null) seekBar.setProgress(target);
             if (elapsedText != null) elapsedText.setText(formatTime(target));
         } catch (IllegalStateException ignored) { }
@@ -2201,7 +2210,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     seekDirection = 0;
                     heldSeekPosition = 0;
                     heldSeekDuration = 0;
-                    handler.postDelayed(startSeek, 350L);
+                    handler.postDelayed(startSeek, 500L);
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     if (event.getX() < -dp(14) || event.getX() > getWidth() + dp(14)
