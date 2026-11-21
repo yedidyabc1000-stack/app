@@ -157,9 +157,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private TextView repeatButton;
     private boolean userSeeking = false;
     private int seekDirection = 0;
+    private int heldSeekPosition = 0;
+    private int heldSeekDuration = 0;
+    private boolean playerPrepared = false;
     private final Runnable heldSeekRunnable = new Runnable() {
         @Override public void run() {
-            if (seekDirection != 0) { seekBy(seekDirection * 750); handler.postDelayed(this, 180L); }
+            if (seekDirection == 0 || !playerPrepared || player == null) return;
+            heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
+                    heldSeekPosition + seekDirection * 1000));
+            seekToAbsolute(heldSeekPosition);
+            handler.postDelayed(this, 240L);
         }
     };
     private ContentObserver mediaObserver;
@@ -600,8 +607,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         page.addView(heading, new LinearLayout.LayoutParams(-1, dp(48)));
 
         String currentTitle = currentSong == null ? "לא מתנגן שיר כרגע" : currentSong.title;
-        String currentArtist = currentSong == null ? "לחץ לפתיחת מסך הנגן" : currentSong.artist;
-        addHomeRow(page, "מתנגן עכשיו", currentTitle, currentArtist, "♫", true,
+        String currentArtist = currentSong == null ? "מתנגן עכשיו" : "מתנגן עכשיו · " + currentSong.artist;
+        addHomeRow(page, currentTitle, currentArtist, "לחץ לפתיחת מסך הנגן", "♫", true,
                 new Runnable() {
                     @Override public void run() {
                         activeTab = TAB_NOW_PLAYING;
@@ -1336,8 +1343,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         seekBar = new SeekBar(this);
         seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration));
         seekBar.setProgress(player != null ? safePosition() : 0);
-        seekBar.setPadding(dp(8), dp(2), dp(8), dp(2));
-        seekBar.setProgressDrawable(createTimelineTrack());
+        seekBar.setPadding(dp(8), dp(8), dp(8), dp(8));
+        seekBar.setMinimumHeight(dp(42));
+        if (Build.VERSION.SDK_INT >= 17) seekBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        seekBar.setProgressDrawable(new TimelineProgressDrawable());
         seekBar.setThumb(createTimelineThumb());
         seekBar.setThumbOffset(dp(8));
 
@@ -1351,7 +1360,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 if (player != null) try { player.seekTo(bar.getProgress()); } catch (Exception ignored) { }
             }
         });
-        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(28)));
+        timeline.addView(seekBar, new LinearLayout.LayoutParams(-1, dp(42)));
         LinearLayout times = new LinearLayout(this);
         times.setOrientation(LinearLayout.HORIZONTAL);
         times.setGravity(Gravity.CENTER_VERTICAL);
@@ -1361,9 +1370,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         durationText.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         times.addView(durationText, new LinearLayout.LayoutParams(0, dp(16), 1));
         LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(-1, dp(18));
-        timeParams.topMargin = dp(9);
+        timeParams.topMargin = dp(3);
         timeline.addView(times, timeParams);
-        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(72));
+        LinearLayout.LayoutParams timelineParams = new LinearLayout.LayoutParams(-1, dp(66));
         timelineParams.topMargin = dp(0);
         content.addView(timeline, timelineParams);
 
@@ -1377,7 +1386,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(previous, -1, new Runnable() {
             @Override public void run() { playPrevious(); }
         });
-        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(46), dp(46));
+        LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(40), dp(40));
         sideParams.rightMargin = dp(18);
         controls.addView(previous, sideParams);
 
@@ -1388,7 +1397,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(60), dp(60)));
+        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(56), dp(56)));
 
         TransportButton next = new TransportButton(this, TransportButton.TYPE_NEXT);
         next.setContentDescription("השיר הבא; לחיצה ארוכה: הרצה קדימה");
@@ -1396,7 +1405,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(next, 1, new Runnable() {
             @Override public void run() { playNext(true); }
         });
-        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(46), dp(46));
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(40), dp(40));
         nextParams.leftMargin = dp(18);
         controls.addView(next, nextParams);
         content.addView(controls, new LinearLayout.LayoutParams(-1, dp(64)));
@@ -1440,12 +1449,28 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         ((TransportButton) control).setSeekGesture(direction, shortClick);
     }
 
-    private void seekBy(int deltaMs) {
-        if (player == null) return;
+    private void beginContinuousSeek(int direction) {
+        if (player == null || !playerPrepared) return;
         try {
-            int duration = player.getDuration();
-            int current = player.getCurrentPosition();
-            int target = Math.max(0, Math.min(duration, current + deltaMs));
+            heldSeekDuration = player.getDuration();
+            heldSeekPosition = player.getCurrentPosition();
+            if (heldSeekDuration <= 0) return;
+            seekDirection = direction;
+            heldSeekPosition = Math.max(0, Math.min(heldSeekDuration,
+                    heldSeekPosition + direction * 1400));
+            seekToAbsolute(heldSeekPosition);
+            handler.removeCallbacks(heldSeekRunnable);
+            handler.postDelayed(heldSeekRunnable, 240L);
+        } catch (IllegalStateException ignored) {
+            seekDirection = 0;
+        }
+    }
+
+    private void seekToAbsolute(int requestedPosition) {
+        if (player == null || !playerPrepared) return;
+        try {
+            int duration = heldSeekDuration > 0 ? heldSeekDuration : player.getDuration();
+            int target = Math.max(0, Math.min(duration, requestedPosition));
             player.seekTo(target);
             if (seekBar != null) seekBar.setProgress(target);
             if (elapsedText != null) elapsedText.setText(formatTime(target));
@@ -1727,7 +1752,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(previous, -1, new Runnable() {
             @Override public void run() { playPrevious(); }
         });
-        controls.addView(previous, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        controls.addView(previous, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         TransportButton play = new TransportButton(this, TransportButton.TYPE_PLAY);
         play.setPlaying(isPlaying());
@@ -1736,7 +1761,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         play.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(58), dp(58));
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(56), dp(56));
         playParams.leftMargin = dp(18);
         playParams.rightMargin = dp(18);
         controls.addView(play, playParams);
@@ -1747,9 +1772,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(next, 1, new Runnable() {
             @Override public void run() { playNext(true); }
         });
-        controls.addView(next, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        controls.addView(next, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
-        safeRoot.addView(controls, new LinearLayout.LayoutParams(-1, dp(70)));
+        safeRoot.addView(controls, new LinearLayout.LayoutParams(-1, dp(66)));
         setContentView(safeRoot);
         nowPlayButton = play;
         miniPlay = null;
@@ -1762,6 +1787,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     @Override public void onPrepared(MediaPlayer mp) {
         if (mp == null || mp != player) return;
+        playerPrepared = true;
         try {
             mp.start();
             if (currentSong != null) recordPlay(currentSong);
@@ -1843,6 +1869,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void releasePlayer() {
+        playerPrepared = false;
+        heldSeekPosition = 0;
+        heldSeekDuration = 0;
+        seekDirection = 0;
+        handler.removeCallbacks(heldSeekRunnable);
         if (player != null) {
             MediaPlayer old = player;
             player = null;
@@ -2024,23 +2055,57 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
     }
 
-    private Drawable createTimelineTrack() {
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(0xffd9e0e3);
-        background.setCornerRadius(dp(4));
-        background.setSize(dp(1), dp(4));
-        GradientDrawable filled = new GradientDrawable();
-        filled.setColor(0xff00aabd);
-        filled.setCornerRadius(dp(4));
-        filled.setSize(dp(1), dp(4));
-        ClipDrawable clipped = new ClipDrawable(filled, Gravity.LEFT, ClipDrawable.HORIZONTAL);
-        LayerDrawable layers = new LayerDrawable(new Drawable[]{background, clipped});
-        layers.setId(0, android.R.id.background);
-        layers.setId(1, android.R.id.progress);
-        layers.setLayerInset(0, 0, 0, 0, 0);
-        layers.setLayerInset(1, 0, 0, 0, 0);
-        return layers;
+    private class TimelineProgressDrawable extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF track = new RectF();
+        private final RectF fill = new RectF();
+
+        @Override public void draw(Canvas canvas) {
+            android.graphics.Rect bounds = getBounds();
+            if (bounds.width() <= 0 || bounds.height() <= 0) return;
+            float inset = dp(2);
+            float left = bounds.left + inset;
+            float right = bounds.right - inset;
+            float centerY = bounds.exactCenterY();
+            float halfHeight = Math.max(dp(2), dp(5) / 2f);
+            track.set(left, centerY - halfHeight, right, centerY + halfHeight);
+            paint.setColor(0xffd4dfe3);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRoundRect(track, halfHeight, halfHeight, paint);
+
+            float fraction = Math.max(0f, Math.min(1f, getLevel() / 10000f));
+            float progressRight = left + (right - left) * fraction;
+            if (progressRight > left) {
+                fill.set(left, centerY - halfHeight, progressRight, centerY + halfHeight);
+                paint.setColor(0xff00aabd);
+                canvas.drawRoundRect(fill, halfHeight, halfHeight, paint);
+            }
+        }
+
+        @Override protected boolean onLevelChange(int level) {
+            invalidateSelf();
+            return true;
+        }
+
+        @Override public void setAlpha(int alpha) {
+            paint.setAlpha(alpha);
+            invalidateSelf();
+        }
+
+        @Override public void setColorFilter(android.graphics.ColorFilter filter) {
+            paint.setColorFilter(filter);
+            invalidateSelf();
+        }
+
+        @Override public int getOpacity() {
+            return android.graphics.PixelFormat.TRANSLUCENT;
+        }
+
+        @Override public int getIntrinsicHeight() {
+            return dp(42);
+        }
     }
+
 
     private Drawable createTimelineThumb() {
         GradientDrawable thumb = new GradientDrawable();
@@ -2053,12 +2118,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private Drawable modernPlayBackground() {
         GradientDrawable normal = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xff24c7d4, 0xff00899b});
+                new int[]{0xff334e59, 0xff152b34});
         normal.setShape(GradientDrawable.OVAL);
-        normal.setStroke(dp(1), 0xff8be4e9);
+        normal.setStroke(dp(2), 0xff68d3dc);
         GradientDrawable pressed = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xff0098a8, 0xff006b7a});
+                new int[]{0xff138c98, 0xff075866});
         pressed.setShape(GradientDrawable.OVAL);
+        pressed.setStroke(dp(2), 0xffa6f0f3);
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_pressed}, pressed);
         states.addState(new int[]{android.R.attr.state_focused}, pressed);
@@ -2091,10 +2157,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() {
                 if (!fingerDown || holdDirection == 0) return;
                 longSeeking = true;
-                seekDirection = holdDirection;
-                seekBy(holdDirection * 1000);
                 handler.removeCallbacks(heldSeekRunnable);
-                handler.postDelayed(heldSeekRunnable, 180L);
+                beginContinuousSeek(holdDirection);
             }
         };
 
@@ -2127,6 +2191,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     handler.removeCallbacks(startSeek);
                     handler.removeCallbacks(heldSeekRunnable);
                     seekDirection = 0;
+                    heldSeekPosition = 0;
+                    heldSeekDuration = 0;
                     handler.postDelayed(startSeek, 450L);
                     return true;
                 case MotionEvent.ACTION_MOVE:
@@ -2142,6 +2208,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     setPressed(false);
                     if (longSeeking) {
                         seekDirection = 0;
+                        heldSeekPosition = 0;
+                        heldSeekDuration = 0;
                         handler.removeCallbacks(heldSeekRunnable);
                     } else if (tapAction != null) {
                         performClick();
@@ -2160,6 +2228,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             longSeeking = false;
             handler.removeCallbacks(startSeek);
             seekDirection = 0;
+            heldSeekPosition = 0;
+            heldSeekDuration = 0;
             handler.removeCallbacks(heldSeekRunnable);
             setPressed(false);
         }
@@ -2173,7 +2243,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             super.onDraw(canvas);
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            float unit = Math.min(getWidth(), getHeight()) * (type == TYPE_PLAY ? 0.68f : 0.53f);
+            float unit = Math.min(getWidth(), getHeight()) * (type == TYPE_PLAY ? 0.58f : 0.44f);
             iconPaint.setColor(type == TYPE_PLAY ? 0xffffffff : 0xff34434a);
             iconPaint.setStyle(Paint.Style.FILL);
             iconPaint.setStrokeWidth(dp(2.1f));
@@ -2192,14 +2262,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                             dp(2), dp(2), iconPaint);
                 } else {
                     Path play = new Path();
-                    play.moveTo(cx - unit * 0.22f, cy - unit * 0.43f);
-                    play.quadTo(cx - unit * 0.29f, cy - unit * 0.48f, cx - unit * 0.29f, cy - unit * 0.34f);
-                    play.lineTo(cx - unit * 0.29f, cy + unit * 0.34f);
-                    play.quadTo(cx - unit * 0.29f, cy + unit * 0.48f, cx - unit * 0.15f, cy + unit * 0.40f);
-                    play.lineTo(cx + unit * 0.40f, cy + unit * 0.08f);
-                    play.quadTo(cx + unit * 0.54f, cy, cx + unit * 0.40f, cy - unit * 0.08f);
-                    play.lineTo(cx - unit * 0.15f, cy - unit * 0.40f);
-                    play.quadTo(cx - unit * 0.19f, cy - unit * 0.44f, cx - unit * 0.22f, cy - unit * 0.43f);
+                    play.moveTo(cx - unit * 0.25f, cy - unit * 0.43f);
+                    play.lineTo(cx + unit * 0.42f, cy);
+                    play.lineTo(cx - unit * 0.25f, cy + unit * 0.43f);
                     play.close();
                     canvas.drawPath(play, iconPaint);
                 }
