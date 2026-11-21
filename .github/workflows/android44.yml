@@ -70,11 +70,11 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.1.9
+          tag_name: v2.2.0
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.1.9
+          name: נגן Android 4.4 – v2.2.0
           body: |
-            גרסה 2.1.9 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
+            גרסה 2.2.0 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
             שופרו תנועת הגלילה במסך הבית, הוסרו תיאורי משנה מיותרים, והכהו מעט את גווני הרקע.
             תמונת העטיפה הוגדלה תוך שמירה על שוליים, וצומצם הרווח שבין פרטי השיר לפס ההתקדמות.
             מנגנון ההרצה בלחיצה ארוכה עודכן, עם צעדי seek תכופים ומיקום יעד מצטבר.
@@ -89,7 +89,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.1.9-debug-apk
+          name: nagan-android44-2.2.0-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
