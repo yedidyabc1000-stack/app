@@ -2068,6 +2068,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         LinearLayout timeline = new LinearLayout(this);
         timeline.setOrientation(LinearLayout.HORIZONTAL);
+        if (Build.VERSION.SDK_INT >= 17) timeline.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         timeline.setGravity(Gravity.CENTER_VERTICAL);
         timeline.setPadding(dp(4), 0, dp(4), 0);
         elapsedText = text(formatTime(player == null ? 0 : safePosition()), 11, COLOR_TEXT, false);
