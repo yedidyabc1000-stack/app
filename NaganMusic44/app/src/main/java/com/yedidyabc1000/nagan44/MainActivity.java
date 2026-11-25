@@ -3236,7 +3236,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         TransportButton play = new TransportButton(this, TransportButton.TYPE_PLAY);
         play.setPlaying(isPlaying());
         play.setContentDescription("הפעל או השהה");
-        play.setBackgroundDrawable(stateRoundRect(COLOR_ACCENT, 0xff0095a5, 28));
+        play.setBackgroundDrawable(modernPlayBackground());
         play.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
