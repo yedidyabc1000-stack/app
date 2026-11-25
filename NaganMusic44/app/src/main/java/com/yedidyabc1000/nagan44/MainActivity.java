@@ -2,8 +2,12 @@ package com.yedidyabc1000.nagan44;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.PendingIntent;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.Context;
 import android.database.ContentObserver;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -13,6 +17,9 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.LinearGradient;
+import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.graphics.Path;
 import android.graphics.Paint;
 import android.graphics.RectF;
@@ -26,6 +33,7 @@ import android.util.Log;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.MediaMetadataRetriever;
+import android.media.RemoteControlClient;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -54,6 +62,9 @@ import android.widget.EditText;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.text.Editable;
+import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
 import android.text.TextWatcher;
 import android.widget.Toast;
 
@@ -68,6 +79,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -117,6 +129,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final int MOOD_TAG_READER_VERSION = 2;
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
+    static final String ACTION_APP_MEDIA_BUTTON = "com.yedidyabc1000.nagan44.ACTION_MEDIA_BUTTON";
+    static final String EXTRA_MEDIA_KEY_CODE = "media_key_code";
     private static final int COLOR_FOCUS = 0xffb7d2d6;
     private static final int COLOR_FOCUS_PRESSED = 0xff9dbfc4;
 
@@ -136,6 +150,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int tabLoadToken = 0;
 
     private MediaPlayer player;
+    private AudioManager audioManager;
+    private RemoteControlClient remoteControlClient;
+    private ComponentName mediaButtonReceiverComponent;
+    private PendingIntent mediaButtonPendingIntent;
+    private BroadcastReceiver mediaCommandReceiver;
+    private Bitmap remoteArtworkBitmap;
+    private final HashSet<Long> failedTrackIds = new HashSet<Long>();
     private MediaPlayer nextPlayer;
     private Song nextSong;
     private int nextQueueIndex = -1;
@@ -261,6 +282,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 if (elapsedText != null) elapsedText.setText(formatTime(position));
                 if (durationText != null) durationText.setText(formatTime(duration));
                 beginCrossfadeIfNeeded(position, duration);
+                updateRemotePlaybackState();
             } else {
                 lastListenSampleRealtime = 0L;
             }
@@ -274,6 +296,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
+        registerMediaControls();
         handler.post(progressRunnable);
         loadUserPlaylists();
         if (hasStoragePermission()) {
@@ -290,6 +313,154 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             }
         } else {
             renderPermissionScreen();
+        }
+    }
+
+
+    private void registerMediaControls() {
+        mediaCommandReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                if (intent == null || !ACTION_APP_MEDIA_BUTTON.equals(intent.getAction())) return;
+                int keyCode = intent.getIntExtra(EXTRA_MEDIA_KEY_CODE, -1);
+                switch (keyCode) {
+                    case KeyEvent.KEYCODE_MEDIA_PLAY:
+                        if (!isPlaying()) togglePlayback();
+                        break;
+                    case KeyEvent.KEYCODE_MEDIA_PAUSE:
+                    case KeyEvent.KEYCODE_MEDIA_STOP:
+                        if (isPlaying() && player != null) {
+                            try { player.pause(); } catch (IllegalStateException ignored) { }
+                            updatePlayerButtons();
+                        }
+                        break;
+                    case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                    case KeyEvent.KEYCODE_HEADSETHOOK:
+                        togglePlayback();
+                        break;
+                    case KeyEvent.KEYCODE_MEDIA_NEXT:
+                        playNext(true);
+                        break;
+                    case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
+                        playPrevious();
+                        break;
+                }
+            }
+        };
+        try {
+            registerReceiver(mediaCommandReceiver, new android.content.IntentFilter(ACTION_APP_MEDIA_BUTTON));
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not register media command receiver", error);
+            mediaCommandReceiver = null;
+        }
+
+        try {
+            audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+            if (audioManager == null) return;
+            mediaButtonReceiverComponent = new ComponentName(this, MediaButtonReceiver.class);
+            Intent mediaButtonIntent = new Intent(Intent.ACTION_MEDIA_BUTTON);
+            mediaButtonIntent.setComponent(mediaButtonReceiverComponent);
+            mediaButtonPendingIntent = PendingIntent.getBroadcast(this, 0, mediaButtonIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT);
+            audioManager.registerMediaButtonEventReceiver(mediaButtonReceiverComponent);
+            remoteControlClient = new RemoteControlClient(mediaButtonPendingIntent);
+            remoteControlClient.setTransportControlFlags(
+                    RemoteControlClient.FLAG_KEY_MEDIA_PLAY
+                    | RemoteControlClient.FLAG_KEY_MEDIA_PAUSE
+                    | RemoteControlClient.FLAG_KEY_MEDIA_PLAY_PAUSE
+                    | RemoteControlClient.FLAG_KEY_MEDIA_NEXT
+                    | RemoteControlClient.FLAG_KEY_MEDIA_PREVIOUS
+                    | RemoteControlClient.FLAG_KEY_MEDIA_STOP
+                    | RemoteControlClient.FLAG_KEY_MEDIA_POSITION_UPDATE);
+            remoteControlClient.setOnGetPlaybackPositionListener(
+                    new RemoteControlClient.OnGetPlaybackPositionListener() {
+                @Override public long onGetPlaybackPosition() {
+                    return playerPrepared ? safePosition() : -1L;
+                }
+            });
+            remoteControlClient.setPlaybackPositionUpdateListener(
+                    new RemoteControlClient.OnPlaybackPositionUpdateListener() {
+                @Override public void onPlaybackPositionUpdate(long newPositionMs) {
+                    seekToAbsolute((int) Math.max(0L, Math.min(Integer.MAX_VALUE, newPositionMs)));
+                }
+            });
+            audioManager.registerRemoteControlClient(remoteControlClient);
+            updateRemoteMetadata(null);
+            updateRemotePlaybackState();
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not register Android remote media controls", error);
+            remoteControlClient = null;
+        }
+    }
+
+    private void unregisterMediaControls() {
+        if (remoteControlClient != null) {
+            try { remoteControlClient.setPlaybackState(RemoteControlClient.PLAYSTATE_STOPPED); }
+            catch (RuntimeException ignored) { }
+            if (audioManager != null) {
+                try { audioManager.unregisterRemoteControlClient(remoteControlClient); }
+                catch (RuntimeException ignored) { }
+            }
+            remoteControlClient = null;
+        }
+        if (audioManager != null && mediaButtonReceiverComponent != null) {
+            try { audioManager.unregisterMediaButtonEventReceiver(mediaButtonReceiverComponent); }
+            catch (RuntimeException ignored) { }
+        }
+        if (mediaCommandReceiver != null) {
+            try { unregisterReceiver(mediaCommandReceiver); } catch (RuntimeException ignored) { }
+            mediaCommandReceiver = null;
+        }
+        mediaButtonPendingIntent = null;
+        mediaButtonReceiverComponent = null;
+        remoteArtworkBitmap = null;
+    }
+
+    private void updateRemotePlaybackState() {
+        if (remoteControlClient == null) return;
+        try {
+            boolean playing = isPlaying();
+            int state = player == null ? RemoteControlClient.PLAYSTATE_STOPPED
+                    : (playing ? RemoteControlClient.PLAYSTATE_PLAYING : RemoteControlClient.PLAYSTATE_PAUSED);
+            remoteControlClient.setPlaybackState(state, playerPrepared ? safePosition() : -1L,
+                    playing ? 1.0f : 0.0f);
+        } catch (RuntimeException error) {
+            Log.d(TAG, "Could not update remote playback state", error);
+        }
+    }
+
+    private void updateRemoteMetadata(Bitmap artwork) {
+        if (remoteControlClient == null) return;
+        try {
+            RemoteControlClient.MetadataEditor editor = remoteControlClient.editMetadata(true);
+            Song song = currentSong;
+            if (song != null) {
+                editor.putString(MediaMetadataRetriever.METADATA_KEY_TITLE, clean(song.title, "ללא שם"));
+                editor.putString(MediaMetadataRetriever.METADATA_KEY_ARTIST, clean(song.artist, "אמן לא ידוע"));
+                editor.putString(MediaMetadataRetriever.METADATA_KEY_ALBUM, clean(song.album, ""));
+                editor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, Math.max(0L, song.duration));
+            } else {
+                editor.putString(MediaMetadataRetriever.METADATA_KEY_TITLE, "נגן מוזיקה");
+                editor.putString(MediaMetadataRetriever.METADATA_KEY_ARTIST, "");
+                editor.putString(MediaMetadataRetriever.METADATA_KEY_ALBUM, "");
+                editor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, 0L);
+            }
+            if (artwork != null && !artwork.isRecycled()) {
+                int largest = Math.max(artwork.getWidth(), artwork.getHeight());
+                if (largest > 512) {
+                    float scale = 512f / largest;
+                    remoteArtworkBitmap = Bitmap.createScaledBitmap(artwork,
+                            Math.max(1, Math.round(artwork.getWidth() * scale)),
+                            Math.max(1, Math.round(artwork.getHeight() * scale)), true);
+                } else {
+                    remoteArtworkBitmap = artwork;
+                }
+            } else {
+                remoteArtworkBitmap = null;
+            }
+            editor.putBitmap(RemoteControlClient.MetadataEditor.BITMAP_KEY_ARTWORK, remoteArtworkBitmap);
+            editor.apply();
+        } catch (RuntimeException error) {
+            Log.d(TAG, "Could not update lock-screen metadata", error);
         }
     }
 
