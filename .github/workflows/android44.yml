@@ -9,7 +9,7 @@ permissions:
 
 # Keep only the newest branch build active; releases and asset commits must not race.
 concurrency:
-  group: nagan-android44-${{ github.ref }}
+  group: nagan-android44-v254-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
