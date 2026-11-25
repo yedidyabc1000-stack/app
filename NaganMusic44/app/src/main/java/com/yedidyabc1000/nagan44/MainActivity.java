@@ -2949,6 +2949,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         crossfadeEnabledForQueue = enableCrossfade;
         queue.clear();
         queue.addAll(songs);
+        failedTrackIds.clear();
         queueIndex = index;
         startCurrentTrack();
     }
@@ -2957,6 +2958,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (queueIndex < 0 || queueIndex >= queue.size()) return;
         releasePlayer();
         currentSong = queue.get(queueIndex);
+        updateRemoteMetadata(null);
         final MediaPlayer newPlayer = new MediaPlayer();
         try {
             newPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
@@ -2970,7 +2972,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             Log.e(TAG, "Could not set audio source for track " + currentSong.id, error);
             try { newPlayer.release(); } catch (Exception ignored) { }
             player = null;
-            Toast.makeText(this, "לא ניתן לפתוח את קובץ השמע", Toast.LENGTH_LONG).show();
+            skipFailedTrack("setDataSource", error);
             return;
         }
 
@@ -2994,8 +2996,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         } catch (RuntimeException error) {
             Log.e(TAG, "prepareAsync failed for track " + currentSong.id, error);
             if (!retryPlaybackWithAlternateSource("prepareAsync", error)) {
-                releasePlayer();
-                Toast.makeText(this, "לא ניתן להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
+                skipFailedTrack("prepareAsync", error);
             }
         }
         updatePlayerButtons();
@@ -3157,6 +3158,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         player = promoted;
         currentSong = promotedSong;
         queueIndex = promotedIndex;
+        updateRemoteMetadata(null);
         if (forcedNextSongId == promotedSong.id) forcedNextSongId = -1L;
         playerPrepared = true;
         try {
@@ -3167,6 +3169,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             try { promoted.release(); } catch (Exception ignored) { }
             player = null;
             playerPrepared = false;
+            if (old != null) {
+                try { old.setOnCompletionListener(null); old.setOnErrorListener(null); } catch (Exception ignored) { }
+                try { old.release(); } catch (Exception ignored) { }
+            }
+            skipFailedTrack("preloaded start", error);
             return;
         }
         if (old != null) {
@@ -3301,7 +3308,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             prepareNextPlayer();
         } catch (RuntimeException error) {
             Log.e(TAG, "MediaPlayer start failed", error);
-            Toast.makeText(this, "המכשיר לא הצליח להתחיל לנגן את הקובץ", Toast.LENGTH_LONG).show();
+            skipFailedTrack("start", error);
+            return;
         }
         updatePlayerButtons();
     }
@@ -3333,8 +3341,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
         if (mp == player) {
             if (retryPlaybackWithAlternateSource("MediaPlayer error " + what + "/" + extra, null)) return true;
-            Toast.makeText(this, "שגיאה בהשמעת השיר (" + what + "/" + extra + ")", Toast.LENGTH_LONG).show();
-            releasePlayer();
+            skipFailedTrack("MediaPlayer error " + what + "/" + extra, null);
             updatePlayerButtons();
         }
         return true;
@@ -3367,6 +3374,68 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
         queueIndex = queueIndex <= 0 ? queue.size() - 1 : queueIndex - 1;
         startCurrentTrack();
+    }
+
+
+    private int findNextUnfailedQueueIndex() {
+        if (queue.size() == 0) return -1;
+        ArrayList<Integer> candidates = new ArrayList<Integer>();
+        int forcedIndex = -1;
+        if (forcedNextSongId >= 0L) {
+            for (int i = Math.max(0, queueIndex + 1); i < queue.size(); i++) {
+                if (queue.get(i).id == forcedNextSongId) { forcedIndex = i; break; }
+            }
+        }
+        if (shuffle) {
+            for (int i = 0; i < queue.size(); i++) if (i != queueIndex) candidates.add(i);
+            Collections.shuffle(candidates, random);
+        } else {
+            for (int i = queueIndex + 1; i < queue.size(); i++) candidates.add(i);
+            if (repeatMode == 1) {
+                for (int i = 0; i < queueIndex; i++) candidates.add(i);
+            }
+        }
+        if (forcedIndex >= 0) {
+            candidates.remove((Integer) forcedIndex);
+            candidates.add(0, forcedIndex);
+        }
+        for (Integer candidate : candidates) {
+            if (candidate != null && candidate >= 0 && candidate < queue.size()
+                    && !failedTrackIds.contains(queue.get(candidate).id)) return candidate;
+        }
+        return -1;
+    }
+
+    private void skipFailedTrack(String reason, Throwable cause) {
+        Song failed = currentSong;
+        if (failed != null) failedTrackIds.add(failed.id);
+        Log.e(TAG, "Skipping unplayable track "
+                + (failed == null ? "(unknown)" : failed.id) + " after " + reason, cause);
+        cancelPreloadedPlayer();
+        releasePlayer();
+
+        int nextIndex = findNextUnfailedQueueIndex();
+        if (nextIndex < 0) {
+            currentSong = null;
+            queueIndex = -1;
+            forcedNextSongId = -1L;
+            updateRemoteMetadata(null);
+            updatePlayerButtons();
+            if (showingNowPlaying) renderNowPlaying();
+            Toast.makeText(this, "לא נמצאו שירים נוספים שניתן לנגן ברשימה", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        queueIndex = nextIndex;
+        Toast.makeText(this, "לא ניתן לנגן את " + (failed == null ? "השיר" : failed.title)
+                + " — מדלג לשיר הבא", Toast.LENGTH_SHORT).show();
+        final int expectedIndex = nextIndex;
+        handler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (isFinishing() || player != null || queueIndex != expectedIndex) return;
+                startCurrentTrack();
+            }
+        }, 120L);
     }
 
     private void togglePlayback() {
@@ -3532,6 +3601,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         unregisterMediaObserver(); handler.removeCallbacks(scanChangedMedia);
         handler.removeCallbacks(progressRunnable);
         releasePlayer();
+        unregisterMediaControls();
         super.onDestroy();
     }
 
