@@ -10,8 +10,8 @@ android {
         applicationId 'com.yedidyabc1000.nagan44'
         minSdk 19
         targetSdk 28
-        versionCode 29
-        versionName '2.5.6'
+        versionCode 30
+        versionName '2.5.7'
     }
 
     compileOptions {
