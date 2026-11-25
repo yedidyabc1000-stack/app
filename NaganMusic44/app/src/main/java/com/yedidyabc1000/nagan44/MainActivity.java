@@ -2111,7 +2111,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() { playPrevious(); }
         });
         LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-        sideParams.rightMargin = dp(14);
+        sideParams.rightMargin = dp(22);
         controls.addView(previous, sideParams);
 
         nowPlayButton = new TransportButton(this, TransportButton.TYPE_PLAY);
@@ -2130,7 +2130,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() { playNext(true); }
         });
         LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-        nextParams.leftMargin = dp(14);
+        nextParams.leftMargin = dp(22);
         controls.addView(next, nextParams);
         content.addView(controls, new LinearLayout.LayoutParams(-1, dp(54)));
 
@@ -2541,17 +2541,26 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         int r = (int) (red[dominant] / counts[dominant]);
         int g = (int) (green[dominant] / counts[dominant]);
         int b = (int) (blue[dominant] / counts[dominant]);
-        final float tintStrength = 0.22f;
-        int paleR = Math.round(0xf5 * (1f - tintStrength) + r * tintStrength);
-        int paleG = Math.round(0xf5 * (1f - tintStrength) + g * tintStrength);
-        int paleB = Math.round(0xf5 * (1f - tintStrength) + b * tintStrength);
-        return 0xff000000 | (paleR << 16) | (paleG << 8) | paleB;
+        // Keep the shade light, but make the cover's hue noticeably visible.
+        float[] hsv = new float[3];
+        android.graphics.Color.colorToHSV(android.graphics.Color.rgb(r, g, b), hsv);
+        if (hsv[1] < 0.12f) hsv[1] = 0.22f;
+        else hsv[1] = Math.min(0.42f, Math.max(0.30f, hsv[1] * 0.88f));
+        hsv[2] = 0.97f;
+        return android.graphics.Color.HSVToColor(hsv);
     }
 
     private void applyNowPlayingBackground(Bitmap bitmap, ImageView target) {
         if (target == null || nowArt != target || currentSong == null || target.getParent() == null) return;
         int paleColor = fadedArtworkBackgroundColor(bitmap);
-        if (nowPlayingRoot != null) nowPlayingRoot.setBackgroundColor(paleColor);
+        if (nowPlayingRoot != null) {
+            nowPlayingRoot.setBackgroundColor(paleColor);
+            // Color the full content area too, so no transparent-parent/theme
+            // behavior can hide the artwork-derived tint on older Android builds.
+            if (nowPlayingRoot.getChildCount() > 0) {
+                nowPlayingRoot.getChildAt(0).setBackgroundColor(paleColor);
+            }
+        }
         View holder = (View) target.getParent();
         holder.setBackgroundColor(paleColor);
     }
