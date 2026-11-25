@@ -8,6 +8,13 @@
         android:label="נגן"
         android:icon="@drawable/app_music_new"
         android:theme="@style/AppTheme">
+        <receiver
+            android:name=".MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
         <activity
             android:name=".MainActivity"
             android:label="נגן"
