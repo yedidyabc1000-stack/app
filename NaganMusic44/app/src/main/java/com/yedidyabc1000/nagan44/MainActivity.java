@@ -433,7 +433,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             RemoteControlClient.MetadataEditor editor = remoteControlClient.editMetadata(true);
             Song song = currentSong;
             if (song != null) {
-                editor.putString(MediaMetadataRetriever.METADATA_KEY_TITLE, clean(song.title, "ללא שם"));
+                editor.putString(MediaMetadataRetriever.METADATA_KEY_TITLE, displaySongTitle(song.title));
                 editor.putString(MediaMetadataRetriever.METADATA_KEY_ARTIST, clean(song.artist, "אמן לא ידוע"));
                 editor.putString(MediaMetadataRetriever.METADATA_KEY_ALBUM, clean(song.album, ""));
                 editor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, Math.max(0L, song.duration));
@@ -2012,7 +2012,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
-        miniTitle = text(currentSong == null ? "לא מתנגן שיר" : currentSong.title, 13, 0xffffffff, true);
+        miniTitle = text(currentSong == null ? "לא מתנגן שיר" : displaySongTitle(currentSong.title), 13, 0xffffffff, true);
         miniSubtitle = text(currentSong == null ? "" : currentSong.artist, 11, 0xffcccccc, false);
         labels.addView(miniTitle, new LinearLayout.LayoutParams(-1, -2));
         labels.addView(miniSubtitle, new LinearLayout.LayoutParams(-1, -2));
@@ -2053,7 +2053,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         artParams.bottomMargin = dp(3);
         content.addView(artHolder, artParams);
 
-        nowTitle = text(currentSong == null ? "אין שיר נבחר" : currentSong.title, 17, COLOR_TEXT, true);
+        nowTitle = text(currentSong == null ? "אין שיר נבחר" : displaySongTitle(currentSong.title), 17, COLOR_TEXT, true);
         nowTitle.setGravity(Gravity.CENTER);
         nowTitle.setSingleLine(true);
         content.addView(nowTitle, new LinearLayout.LayoutParams(-1, dp(20)));
@@ -2121,7 +2121,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         TransportButton next = new TransportButton(this, TransportButton.TYPE_NEXT);
         next.setContentDescription("השיר הבא; לחיצה ארוכה: הרצה קדימה");
@@ -2156,6 +2156,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         }
                         target.setImageBitmap(bitmap);
                         fitArtworkViewToBitmap(target, bitmap);
+                        applyNowPlayingBackground(bitmap, target);
                         updateRemoteMetadata(bitmap);
                     }
                 });
@@ -2435,7 +2436,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 {0xff172a24, 0xff41644d, 0xff13221b},
                 {0xff20243b, 0xff3e5c76, 0xff1b263b}
         };
-        String title = clean(song.title, "שיר ללא שם");
+        String title = displaySongTitle(song.title);
         String artist = clean(song.artist, "אמן לא ידוע");
         if (title.length() > 78) title = title.substring(0, 75) + "…";
         if (artist.length() > 70) artist = artist.substring(0, 67) + "…";
@@ -2484,6 +2485,75 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         artistLayout.draw(canvas);
         canvas.restore();
         return bitmap;
+    }
+
+
+    /** Remove a leading track number for display only; keep the original metadata untouched. */
+    private String displaySongTitle(String rawTitle) {
+        if (rawTitle == null) return "";
+        int index = 0;
+        while (index < rawTitle.length() && Character.isDigit(rawTitle.charAt(index))) index++;
+        if (index == 0) return rawTitle;
+        while (index < rawTitle.length()) {
+            char ch = rawTitle.charAt(index);
+            if (Character.isWhitespace(ch) || ch == '-' || ch == '_' || ch == '.' || ch == ')' || ch == ']') {
+                index++;
+            } else {
+                break;
+            }
+        }
+        String display = rawTitle.substring(index).trim();
+        return display.length() == 0 ? rawTitle.trim() : display;
+    }
+
+    /** Pick the most common coarse color from the cover and fade it into a pale tint. */
+    private int fadedArtworkBackgroundColor(Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled() || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) {
+            return COLOR_BG;
+        }
+        final int bins = 4096;
+        int[] counts = new int[bins];
+        long[] red = new long[bins];
+        long[] green = new long[bins];
+        long[] blue = new long[bins];
+        int stepX = Math.max(1, bitmap.getWidth() / 32);
+        int stepY = Math.max(1, bitmap.getHeight() / 32);
+        for (int y = stepY / 2; y < bitmap.getHeight(); y += stepY) {
+            for (int x = stepX / 2; x < bitmap.getWidth(); x += stepX) {
+                int pixel = bitmap.getPixel(x, y);
+                int alpha = (pixel >>> 24) & 0xff;
+                if (alpha < 128) continue;
+                int r = (pixel >>> 16) & 0xff;
+                int g = (pixel >>> 8) & 0xff;
+                int b = pixel & 0xff;
+                int bin = ((r >>> 4) << 8) | ((g >>> 4) << 4) | (b >>> 4);
+                counts[bin]++;
+                red[bin] += r;
+                green[bin] += g;
+                blue[bin] += b;
+            }
+        }
+        int dominant = -1;
+        for (int i = 0; i < bins; i++) {
+            if (dominant < 0 || counts[i] > counts[dominant]) dominant = i;
+        }
+        if (dominant < 0 || counts[dominant] == 0) return COLOR_BG;
+        int r = (int) (red[dominant] / counts[dominant]);
+        int g = (int) (green[dominant] / counts[dominant]);
+        int b = (int) (blue[dominant] / counts[dominant]);
+        final float tintStrength = 0.22f;
+        int paleR = Math.round(0xf5 * (1f - tintStrength) + r * tintStrength);
+        int paleG = Math.round(0xf5 * (1f - tintStrength) + g * tintStrength);
+        int paleB = Math.round(0xf5 * (1f - tintStrength) + b * tintStrength);
+        return 0xff000000 | (paleR << 16) | (paleG << 8) | paleB;
+    }
+
+    private void applyNowPlayingBackground(Bitmap bitmap, ImageView target) {
+        if (target == null || nowArt != target || currentSong == null || target.getParent() == null) return;
+        int paleColor = fadedArtworkBackgroundColor(bitmap);
+        if (nowPlayingRoot != null) nowPlayingRoot.setBackgroundColor(paleColor);
+        View holder = (View) target.getParent();
+        holder.setBackgroundColor(paleColor);
     }
 
     private void updatePlayerButtons() {
@@ -2879,7 +2949,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void updateMiniPlayerText() {
-        if (miniTitle != null) miniTitle.setText(currentSong == null ? "לא מתנגן שיר" : currentSong.title);
+        if (miniTitle != null) miniTitle.setText(currentSong == null ? "לא מתנגן שיר" : displaySongTitle(currentSong.title));
         if (miniSubtitle != null) miniSubtitle.setText(currentSong == null ? "" : currentSong.artist);
     }
 
@@ -3228,7 +3298,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(previous, -1, new Runnable() {
             @Override public void run() { playPrevious(); }
         });
-        controls.addView(previous, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        controls.addView(previous, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         TransportButton play = new TransportButton(this, TransportButton.TYPE_PLAY);
         play.setPlaying(isPlaying());
@@ -3237,7 +3307,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         play.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(56), dp(56));
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(50), dp(50));
         playParams.leftMargin = dp(18);
         playParams.rightMargin = dp(18);
         controls.addView(play, playParams);
@@ -3248,7 +3318,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         installHoldSeek(next, 1, new Runnable() {
             @Override public void run() { playNext(true); }
         });
-        controls.addView(next, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        controls.addView(next, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         safeRoot.addView(controls, new LinearLayout.LayoutParams(-1, dp(66)));
         setContentView(safeRoot);
@@ -3760,14 +3830,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private Drawable modernPlayBackground() {
-        GradientDrawable normal = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xff334e59, 0xff152b34});
+        GradientDrawable normal = new GradientDrawable();
         normal.setShape(GradientDrawable.OVAL);
-        normal.setStroke(dp(2), 0xff68d3dc);
-        GradientDrawable pressed = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xff138c98, 0xff075866});
+        normal.setColor(0xffffffff);
+        GradientDrawable pressed = new GradientDrawable();
         pressed.setShape(GradientDrawable.OVAL);
-        pressed.setStroke(dp(2), 0xffa6f0f3);
+        pressed.setColor(0xffe8e8e8);
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[]{android.R.attr.state_pressed}, pressed);
         states.addState(new int[]{android.R.attr.state_focused}, pressed);
@@ -3856,8 +3924,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             super.onDraw(canvas);
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            float unit = Math.min(getWidth(), getHeight()) * (type == TYPE_PLAY ? 0.66f : 0.36f);
-            iconPaint.setColor(type == TYPE_PLAY ? 0xffffffff : 0xff34434a);
+            float unit = Math.min(getWidth(), getHeight()) * (type == TYPE_PLAY ? 0.66f : 0.44f);
+            iconPaint.setColor(android.graphics.Color.BLACK);
             iconPaint.setStyle(Paint.Style.FILL);
             iconPaint.setStrokeWidth(dp(2.1f));
             iconPaint.setStrokeCap(Paint.Cap.ROUND);
