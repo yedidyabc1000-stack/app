@@ -3032,23 +3032,32 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private int findNextQueueIndex(boolean manual) {
         if (queue.size() == 0) return -1;
-        int next = -1;
+        ArrayList<Integer> candidates = new ArrayList<Integer>();
+        int forcedIndex = -1;
         if (forcedNextSongId >= 0L) {
             for (int i = Math.max(0, queueIndex + 1); i < queue.size(); i++) {
-                if (queue.get(i).id == forcedNextSongId) { next = i; break; }
+                if (queue.get(i).id == forcedNextSongId) { forcedIndex = i; break; }
             }
         }
-        if (next < 0 && shuffle && queue.size() > 1) {
-            next = queueIndex;
-            while (next == queueIndex) next = random.nextInt(queue.size());
-        } else if (next < 0) {
-            next = queueIndex + 1;
+
+        if (shuffle && queue.size() > 1) {
+            for (int i = 0; i < queue.size(); i++) if (i != queueIndex) candidates.add(i);
+            Collections.shuffle(candidates, random);
+        } else {
+            for (int i = Math.max(0, queueIndex + 1); i < queue.size(); i++) candidates.add(i);
+            if (repeatMode == 1 || manual) {
+                for (int i = 0; i < Math.max(0, queueIndex); i++) candidates.add(i);
+            }
         }
-        if (next >= queue.size()) {
-            if (repeatMode == 1 || manual) next = 0;
-            else return -1;
+        if (forcedIndex >= 0) {
+            candidates.remove((Integer) forcedIndex);
+            candidates.add(0, forcedIndex);
         }
-        return next >= 0 && next < queue.size() ? next : -1;
+        for (Integer candidate : candidates) {
+            if (candidate != null && candidate >= 0 && candidate < queue.size()
+                    && !failedTrackIds.contains(queue.get(candidate).id)) return candidate;
+        }
+        return -1;
     }
 
     private void prepareNextPlayer() {
