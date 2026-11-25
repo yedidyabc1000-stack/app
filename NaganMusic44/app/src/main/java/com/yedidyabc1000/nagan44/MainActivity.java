@@ -202,7 +202,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private ImageView nowArt;
     private TextView nowTitle;
     private TextView nowArtist;
-    private TextView nowAlbum;
     private TextView elapsedText;
     private TextView durationText;
     private SeekBar seekBar;
@@ -2061,9 +2060,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArtist = text(currentSong == null ? "" : currentSong.artist, 13, COLOR_SUB, false);
         nowArtist.setGravity(Gravity.CENTER);
         content.addView(nowArtist, new LinearLayout.LayoutParams(-1, dp(15)));
-        nowAlbum = text(currentSong == null ? "" : currentSong.album, 12, COLOR_SUB, false);
-        nowAlbum.setGravity(Gravity.CENTER);
-        content.addView(nowAlbum, new LinearLayout.LayoutParams(-1, dp(14)));
         content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.05f));
 
         LinearLayout timeline = new LinearLayout(this);
@@ -2467,11 +2463,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         TextPaint titlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(0xfffaf8f3);
         titlePaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        titlePaint.setTextSize(title.length() > 42 ? 42f : (title.length() > 26 ? 48f : 56f));
+        titlePaint.setTextSize(title.length() > 42 ? 49f : (title.length() > 26 ? 56f : 65f));
         TextPaint artistPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         artistPaint.setColor(0xffe8e7e2);
         artistPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        artistPaint.setTextSize(31f);
+        artistPaint.setTextSize(36f);
 
         StaticLayout titleLayout = new StaticLayout(title, titlePaint, textWidth,
                 Layout.Alignment.ALIGN_CENTER, 1.10f, 0f, true);
@@ -2495,7 +2491,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (nowPlayButton != null) nowPlayButton.setPlaying(playing);
         if (nowArt != null) {
             float targetScale = playing ? 1f : 0.94f;
-            nowArt.animate().scaleX(targetScale).scaleY(targetScale).setDuration(280L).start();
+            nowArt.animate().scaleX(targetScale).scaleY(targetScale).setDuration(240L).start();
         }
         updateRemotePlaybackState();
         if (miniPlay != null) miniPlay.setImageResource(playing ? R.drawable.ic_media_pause_new : R.drawable.ic_media_play_new);
