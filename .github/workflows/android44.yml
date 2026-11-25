@@ -9,7 +9,7 @@ permissions:
 
 # Keep only the newest branch build active; releases and asset commits must not race.
 concurrency:
-  group: nagan-android44-v256-${{ github.ref }}
+  group: nagan-android44-v257-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -70,11 +70,11 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.5.6
+          tag_name: v2.5.7
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.5.6
+          name: נגן Android 4.4 – v2.5.7
           body: |
-            גרסה 2.5.6 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
+            גרסה 2.5.7 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
             אינטגרציה עם בקרי המדיה של Android באמצעות RemoteControlClient: הצגת שם השיר, האמן, האלבום והעטיפה במסך הנעילה ובממשקי המדיה של המכשיר, וכן תמיכה בפקודות הפעלה/השהיה, שיר הבא/קודם וגרירת מיקום.
             לחצני מדיה מאוזניות ומפקדי המערכת מועברים לנגן באמצעות BroadcastReceiver ייעודי.
             טיפול בכשלי השמעה שופר: לאחר כישלון מקור MediaStore, נתיב מקומי או MediaPlayer, הנגן מנסה מקור חלופי פעם אחת ואז מדלג אוטומטית על השיר הבעייתי. שירים שנכשלו מסומנים כדי למנוע לולאות דילוג וניסיונות אינסופיים.
@@ -84,6 +84,8 @@ jobs:
             במסך השיר המתנגן, לחצן ההפעלה הוקטן מעט; הרקע שלו לבן והסמל שחור. משולשי הדילוג הוגדלו מעט.
             צבע הרקע של מסך השיר המתנגן נגזר מהצבע הדומיננטי בתמונת העטיפה ומובהר לגוון פסטלי עדין.
             מספרים המופיעים בתחילת שם השיר מוסרים בתצוגת הנגן, בנגן הממוזער, בעטיפה שנוצרת ובפרטי המדיה החיצוניים; המטא-נתונים המקוריים וקובץ השיר אינם משתנים.
+            גוון הרקע במסך השיר המתנגן מחושב כעת בגוון פסטלי ברור יותר מתוך הצבע הדומיננטי בעטיפה, ומוחל במפורש גם על אזור התוכן וגם על אזור התמונה כדי להבטיח שיוצג.
+            המרווח משני צדי כפתור ההפעלה בין חיצי הדילוג הוגדל מעט.
           files: |
             releases/NaganMusic44-Android44.apk
             releases/NaganMusic44-source.zip
@@ -95,7 +97,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.5.6-debug-apk
+          name: nagan-android44-2.5.7-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
