@@ -9,7 +9,7 @@ permissions:
 
 # Keep only the newest branch build active; releases and asset commits must not race.
 concurrency:
-  group: nagan-android44-v254-${{ github.ref }}
+  group: nagan-android44-v255-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -70,11 +70,11 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.5.4
+          tag_name: v2.5.5
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.5.4
+          name: נגן Android 4.4 – v2.5.5
           body: |
-            גרסה 2.5.4 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
+            גרסה 2.5.5 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
             אינטגרציה עם בקרי המדיה של Android באמצעות RemoteControlClient: הצגת שם השיר, האמן, האלבום והעטיפה במסך הנעילה ובממשקי המדיה של המכשיר, וכן תמיכה בפקודות הפעלה/השהיה, שיר הבא/קודם וגרירת מיקום.
             לחצני מדיה מאוזניות ומפקדי המערכת מועברים לנגן באמצעות BroadcastReceiver ייעודי.
             טיפול בכשלי השמעה שופר: לאחר כישלון מקור MediaStore, נתיב מקומי או MediaPlayer, הנגן מנסה מקור חלופי פעם אחת ואז מדלג אוטומטית על השיר הבעייתי. שירים שנכשלו מסומנים כדי למנוע לולאות דילוג וניסיונות אינסופיים.
@@ -92,7 +92,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.5.4-debug-apk
+          name: nagan-android44-2.5.5-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
