@@ -18,6 +18,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
+import android.graphics.RadialGradient;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.Path;
@@ -2219,6 +2220,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() {
                 final Bitmap bitmap = loadArtwork(song);
                 if (bitmap == null) return;
+                final Bitmap blurredBackground = createBlurredDarkArtwork(bitmap);
                 handler.post(new Runnable() {
                     @Override public void run() {
                         if (isFinishing() || currentSong == null || currentSong.id != songId
@@ -2228,7 +2230,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         }
                         target.setImageBitmap(bitmap);
                         fitArtworkViewToBitmap(target, bitmap);
-                        applyNowPlayingBackground(bitmap, target);
+                        applyNowPlayingBackground(blurredBackground, target);
                         updateRemoteMetadata(bitmap);
                     }
                 });
@@ -2501,64 +2503,172 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private Bitmap createGeneratedArtwork(Song song) {
         final int size = 720;
         int[][] palettes = new int[][]{
-                {0xff16213e, 0xff533483, 0xff0f3460},
-                {0xff12343b, 0xff1f6f78, 0xff0b1f2a},
-                {0xff3b1f2b, 0xff7b2d45, 0xff2b193d},
-                {0xff302b24, 0xff745b35, 0xff25201c},
-                {0xff172a24, 0xff41644d, 0xff13221b},
-                {0xff20243b, 0xff3e5c76, 0xff1b263b}
+                {0xff10172e, 0xff6843a5, 0xff182b54, 0xff070b18},
+                {0xff09272e, 0xff168b91, 0xff123d54, 0xff06151d},
+                {0xff281321, 0xffa13d67, 0xff44204f, 0xff100914},
+                {0xff241b13, 0xffbd8545, 0xff60402c, 0xff100d0a},
+                {0xff10251c, 0xff4c996c, 0xff254f52, 0xff07120e},
+                {0xff121c32, 0xff4d82a9, 0xff303b72, 0xff080d19},
+                {0xff24142f, 0xff9b61a8, 0xff3d397a, 0xff0c0919},
+                {0xff292018, 0xffb45d42, 0xff55304a, 0xff110b12}
         };
         String title = displaySongTitle(song.title);
         String artist = clean(song.artist, "אמן לא ידוע");
         if (title.length() > 78) title = title.substring(0, 75) + "…";
-        if (artist.length() > 70) artist = artist.substring(0, 67) + "…";
+        if (artist.length() > 52) artist = artist.substring(0, 49) + "…";
         int paletteIndex = ((title + "|" + artist).hashCode() & 0x7fffffff) % palettes.length;
         int[] palette = palettes[paletteIndex];
 
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
+
         Paint background = new Paint(Paint.ANTI_ALIAS_FLAG);
         background.setShader(new LinearGradient(0, 0, size, size,
-                new int[]{palette[0], palette[1], palette[2]}, null, Shader.TileMode.CLAMP));
+                new int[]{palette[0], palette[1], palette[2], palette[3]},
+                new float[]{0f, 0.38f, 0.72f, 1f}, Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, size, size, background);
 
-        Paint decoration = new Paint(Paint.ANTI_ALIAS_FLAG);
-        decoration.setStyle(Paint.Style.STROKE);
-        decoration.setStrokeWidth(3f);
-        decoration.setColor(0x22ffffff);
-        canvas.drawCircle(size * 0.82f, size * 0.20f, size * 0.23f, decoration);
-        canvas.drawCircle(size * 0.82f, size * 0.20f, size * 0.31f, decoration);
-        decoration.setColor(0x18ffffff);
-        decoration.setStyle(Paint.Style.FILL);
-        canvas.drawCircle(size * 0.13f, size * 0.88f, size * 0.20f, decoration);
+        // Soft pools of coloured light add depth without making the title hard to read.
+        Paint light = new Paint(Paint.ANTI_ALIAS_FLAG);
+        light.setShader(new RadialGradient(size * 0.78f, size * 0.20f, size * 0.72f,
+                new int[]{0x66000000 | (palette[1] & 0x00ffffff), 0x00000000},
+                new float[]{0f, 1f}, Shader.TileMode.CLAMP));
+        canvas.drawCircle(size * 0.78f, size * 0.20f, size * 0.72f, light);
+        light.setShader(new RadialGradient(size * 0.12f, size * 0.82f, size * 0.56f,
+                new int[]{0x44000000 | (palette[2] & 0x00ffffff), 0x00000000},
+                null, Shader.TileMode.CLAMP));
+        canvas.drawCircle(size * 0.12f, size * 0.82f, size * 0.56f, light);
 
-        int textWidth = size - 124;
+        // Broad translucent light beams and geometric layers.
+        Paint shapes = new Paint(Paint.ANTI_ALIAS_FLAG);
+        shapes.setStyle(Paint.Style.FILL);
+        shapes.setColor(0x12ffffff);
+        Path beam = new Path();
+        beam.moveTo(0, size * 0.17f);
+        beam.lineTo(size * 0.37f, 0);
+        beam.lineTo(size * 0.53f, 0);
+        beam.lineTo(0, size * 0.43f);
+        beam.close();
+        canvas.drawPath(beam, shapes);
+        Path lowerShape = new Path();
+        lowerShape.moveTo(size, size * 0.48f);
+        lowerShape.lineTo(size, size);
+        lowerShape.lineTo(size * 0.42f, size);
+        lowerShape.close();
+        canvas.drawPath(lowerShape, shapes);
+
+        Paint rings = new Paint(Paint.ANTI_ALIAS_FLAG);
+        rings.setStyle(Paint.Style.STROKE);
+        rings.setStrokeWidth(2.2f);
+        rings.setColor(0x35ffffff);
+        canvas.drawCircle(size * 0.83f, size * 0.19f, size * 0.18f, rings);
+        rings.setStrokeWidth(1.5f);
+        rings.setColor(0x20ffffff);
+        canvas.drawCircle(size * 0.83f, size * 0.19f, size * 0.27f, rings);
+        canvas.drawCircle(size * 0.83f, size * 0.19f, size * 0.36f, rings);
+        rings.setColor(0x1cffffff);
+        canvas.drawCircle(size * 0.12f, size * 0.78f, size * 0.22f, rings);
+        canvas.drawCircle(size * 0.12f, size * 0.78f, size * 0.31f, rings);
+
+        // Fine framing lines and subtle particles create a polished video-cover finish.
+        Paint detail = new Paint(Paint.ANTI_ALIAS_FLAG);
+        detail.setColor(0x18ffffff);
+        detail.setStrokeWidth(1f);
+        for (int i = 0; i < 8; i++) {
+            float x = 54f + i * 88f;
+            canvas.drawLine(x, 34f, x, size - 34f, detail);
+        }
+        for (int i = 0; i < 6; i++) {
+            float y = 54f + i * 112f;
+            canvas.drawLine(34f, y, size - 34f, y, detail);
+        }
+        for (int i = 0; i < 22; i++) {
+            float x = (float) ((i * 137 + paletteIndex * 47) % 650) + 35f;
+            float y = (float) ((i * 83 + paletteIndex * 71) % 650) + 35f;
+            detail.setColor(i % 3 == 0 ? 0x55ffffff : 0x27ffffff);
+            canvas.drawCircle(x, y, i % 4 == 0 ? 2.8f : 1.5f, detail);
+        }
+
+        // Oversized, very faint initial gives every generated cover a unique graphic mark.
+        String initial = title.length() == 0 ? "♫" : title.substring(0, 1);
+        Paint monogram = new Paint(Paint.ANTI_ALIAS_FLAG);
+        monogram.setColor(0x16ffffff);
+        monogram.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        monogram.setTextSize(390f);
+        monogram.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText(initial, size * 0.51f, size * 0.61f, monogram);
+
+        // Small editorial label at the top.
+        Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pill.setColor(0x2affffff);
+        pill.setStyle(Paint.Style.FILL);
+        canvas.drawRoundRect(new RectF(238f, 55f, 482f, 105f), 24f, 24f, pill);
+        TextPaint labelPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        labelPaint.setColor(0xfff4f1f8);
+        labelPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        labelPaint.setTextSize(19f);
+        labelPaint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText("LYRICS  •  VISUAL", size / 2f, 87f, labelPaint);
+
+        // A dark translucent text field keeps both Hebrew and Latin titles legible.
+        Paint textPanel = new Paint(Paint.ANTI_ALIAS_FLAG);
+        textPanel.setShader(new LinearGradient(0, 210f, 0, 555f,
+                new int[]{0x00040a14, 0x55040a14, 0x55040a14, 0x00040a14},
+                new float[]{0f, 0.20f, 0.82f, 1f}, Shader.TileMode.CLAMP));
+        canvas.drawRoundRect(new RectF(30f, 205f, size - 30f, 555f), 28f, 28f, textPanel);
+
+        int textWidth = size - 150;
         TextPaint titlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(0xfffaf8f3);
+        titlePaint.setColor(0xfffbfaff);
         titlePaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        titlePaint.setTextSize(title.length() > 42 ? 49f : (title.length() > 26 ? 56f : 65f));
+        titlePaint.setTextSize(title.length() > 48 ? 46f : (title.length() > 28 ? 55f : 66f));
+        titlePaint.setShadowLayer(16f, 0f, 5f, 0xaa000000);
         TextPaint artistPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        artistPaint.setColor(0xffe8e7e2);
+        artistPaint.setColor(0xffe4e1eb);
         artistPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        artistPaint.setTextSize(36f);
+        artistPaint.setTextSize(32f);
+        artistPaint.setShadowLayer(10f, 0f, 3f, 0x88000000);
 
         StaticLayout titleLayout = new StaticLayout(title, titlePaint, textWidth,
-                Layout.Alignment.ALIGN_CENTER, 1.10f, 0f, true);
+                Layout.Alignment.ALIGN_CENTER, 1.08f, 0f, true);
         StaticLayout artistLayout = new StaticLayout(artist, artistPaint, textWidth,
                 Layout.Alignment.ALIGN_CENTER, 1.10f, 0f, true);
-        int gap = dp(18);
+        int gap = 24;
         int totalHeight = titleLayout.getHeight() + gap + artistLayout.getHeight();
-        float y = Math.max(70f, (size - totalHeight) / 2f);
+        float y = Math.max(222f, (size - totalHeight) / 2f + 16f);
 
         canvas.save();
-        canvas.translate(62f, y);
+        canvas.translate(75f, y);
         titleLayout.draw(canvas);
         canvas.translate(0f, titleLayout.getHeight() + gap);
         artistLayout.draw(canvas);
         canvas.restore();
+
+        // Restrained audio waveform along the lower edge.
+        Paint waveform = new Paint(Paint.ANTI_ALIAS_FLAG);
+        waveform.setStyle(Paint.Style.FILL);
+        float centerY = 631f;
+        float barGap = 5f;
+        float barWidth = 4f;
+        float totalWaveWidth = 54f * barWidth + 53f * barGap;
+        float startX = (size - totalWaveWidth) / 2f;
+        int seed = (title + artist).hashCode();
+        for (int i = 0; i < 54; i++) {
+            int value = Math.abs((seed + i * 97 + i * i * 13) % 100);
+            float height = 9f + (value / 100f) * 43f;
+            float x = startX + i * (barWidth + barGap);
+            float alphaFactor = i < 5 || i > 48 ? 0.45f : 1f;
+            waveform.setColor(((int) (0x88 * alphaFactor) << 24) | (palette[1] & 0x00ffffff));
+            canvas.drawRoundRect(new RectF(x, centerY - height / 2f,
+                    x + barWidth, centerY + height / 2f), 2f, 2f, waveform);
+        }
+        Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
+        border.setColor(0x42ffffff);
+        border.setStyle(Paint.Style.STROKE);
+        border.setStrokeWidth(2f);
+        canvas.drawRoundRect(new RectF(18f, 18f, size - 18f, size - 18f), 25f, 25f, border);
         return bitmap;
     }
-
 
     /** Remove a leading track number for display only; keep the original metadata untouched. */
     private String displaySongTitle(String rawTitle) {
@@ -2578,63 +2688,131 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         return display.length() == 0 ? rawTitle.trim() : display;
     }
 
-    /** Pick the most common coarse color from the cover and fade it into a pale tint. */
-    private int fadedArtworkBackgroundColor(Bitmap bitmap) {
-        if (bitmap == null || bitmap.isRecycled() || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) {
-            return COLOR_BG;
+    /**
+     * Produce a small, darkened blur from the real or generated cover.
+     * This runs on the artwork worker thread; the original cached cover is never modified.
+     */
+    private Bitmap createBlurredDarkArtwork(Bitmap source) {
+        if (source == null || source.isRecycled()
+                || source.getWidth() <= 0 || source.getHeight() <= 0) return null;
+        final int side = 128;
+        Bitmap scaled = Bitmap.createScaledBitmap(source, side, side, true);
+        if (scaled == source) {
+            scaled = source.copy(Bitmap.Config.ARGB_8888, false);
+            if (scaled == null) return null;
         }
-        final int bins = 4096;
-        int[] counts = new int[bins];
-        long[] red = new long[bins];
-        long[] green = new long[bins];
-        long[] blue = new long[bins];
-        int stepX = Math.max(1, bitmap.getWidth() / 32);
-        int stepY = Math.max(1, bitmap.getHeight() / 32);
-        for (int y = stepY / 2; y < bitmap.getHeight(); y += stepY) {
-            for (int x = stepX / 2; x < bitmap.getWidth(); x += stepX) {
-                int pixel = bitmap.getPixel(x, y);
-                int alpha = (pixel >>> 24) & 0xff;
-                if (alpha < 128) continue;
-                int r = (pixel >>> 16) & 0xff;
-                int g = (pixel >>> 8) & 0xff;
-                int b = pixel & 0xff;
-                int bin = ((r >>> 4) << 8) | ((g >>> 4) << 4) | (b >>> 4);
-                counts[bin]++;
-                red[bin] += r;
-                green[bin] += g;
-                blue[bin] += b;
-            }
+        int[] pixels = new int[side * side];
+        int[] temp = new int[side * side];
+        int[] blurred = new int[side * side];
+        scaled.getPixels(pixels, 0, side, 0, 0, side, side);
+        boxBlurArtwork(pixels, temp, side, side, 9, true);
+        boxBlurArtwork(temp, blurred, side, side, 9, false);
+        boxBlurArtwork(blurred, temp, side, side, 7, true);
+        boxBlurArtwork(temp, blurred, side, side, 7, false);
+        for (int i = 0; i < blurred.length; i++) {
+            int color = blurred[i];
+            int red = (int) (((color >>> 16) & 0xff) * 0.52f);
+            int green = (int) (((color >>> 8) & 0xff) * 0.52f);
+            int blue = (int) ((color & 0xff) * 0.52f);
+            blurred[i] = 0xff000000 | (red << 16) | (green << 8) | blue;
         }
-        int dominant = -1;
-        for (int i = 0; i < bins; i++) {
-            if (dominant < 0 || counts[i] > counts[dominant]) dominant = i;
-        }
-        if (dominant < 0 || counts[dominant] == 0) return COLOR_BG;
-        int r = (int) (red[dominant] / counts[dominant]);
-        int g = (int) (green[dominant] / counts[dominant]);
-        int b = (int) (blue[dominant] / counts[dominant]);
-        // Keep the shade light, but make the cover's hue noticeably visible.
-        float[] hsv = new float[3];
-        android.graphics.Color.colorToHSV(android.graphics.Color.rgb(r, g, b), hsv);
-        if (hsv[1] < 0.12f) hsv[1] = 0.22f;
-        else hsv[1] = Math.min(0.42f, Math.max(0.30f, hsv[1] * 0.88f));
-        hsv[2] = 0.97f;
-        return android.graphics.Color.HSVToColor(hsv);
+        Bitmap result = Bitmap.createBitmap(blurred, side, side, Bitmap.Config.ARGB_8888);
+        if (scaled != source && !scaled.isRecycled()) scaled.recycle();
+        return result;
     }
 
-    private void applyNowPlayingBackground(Bitmap bitmap, ImageView target) {
-        if (target == null || nowArt != target || currentSong == null || target.getParent() == null) return;
-        int paleColor = fadedArtworkBackgroundColor(bitmap);
-        if (nowPlayingRoot != null) {
-            nowPlayingRoot.setBackgroundColor(paleColor);
-            // Color the full content area too, so no transparent-parent/theme
-            // behavior can hide the artwork-derived tint on older Android builds.
-            if (nowPlayingRoot.getChildCount() > 0) {
-                nowPlayingRoot.getChildAt(0).setBackgroundColor(paleColor);
+    private void boxBlurArtwork(int[] input, int[] output, int width, int height,
+                                int radius, boolean horizontal) {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int count = 0;
+                int red = 0;
+                int green = 0;
+                int blue = 0;
+                for (int offset = -radius; offset <= radius; offset++) {
+                    int sx = horizontal ? Math.max(0, Math.min(width - 1, x + offset)) : x;
+                    int sy = horizontal ? y : Math.max(0, Math.min(height - 1, y + offset));
+                    int color = input[sy * width + sx];
+                    red += (color >>> 16) & 0xff;
+                    green += (color >>> 8) & 0xff;
+                    blue += color & 0xff;
+                    count++;
+                }
+                output[y * width + x] = 0xff000000
+                        | ((red / count) << 16) | ((green / count) << 8) | (blue / count);
             }
         }
+    }
+
+    private void applyNowPlayingBackground(Bitmap blurredArtwork, ImageView target) {
+        if (target == null || nowArt != target || currentSong == null
+                || target.getParent() == null || blurredArtwork == null) return;
+        if (nowPlayingRoot != null) {
+            nowPlayingRoot.setBackgroundDrawable(new DarkArtworkDrawable(blurredArtwork));
+        }
         View holder = (View) target.getParent();
-        holder.setBackgroundColor(paleColor);
+        holder.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+
+        if (nowTitle != null) {
+            nowTitle.setTextColor(0xfffaf9ff);
+            nowTitle.setShadowLayer(dp(3), 0f, dp(1), 0xaa000000);
+        }
+        if (nowArtist != null) {
+            nowArtist.setTextColor(0xffdedbe6);
+            nowArtist.setShadowLayer(dp(2), 0f, dp(1), 0x99000000);
+        }
+        if (elapsedText != null) elapsedText.setTextColor(0xfff4f1f8);
+        if (durationText != null) durationText.setTextColor(0xfff4f1f8);
+    }
+
+    /** Draws the blurred cover without stretching its aspect ratio. */
+    private static class DarkArtworkDrawable extends Drawable {
+        private final Bitmap bitmap;
+        private final Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint shadePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        DarkArtworkDrawable(Bitmap bitmap) {
+            this.bitmap = bitmap;
+        }
+
+        @Override public void draw(Canvas canvas) {
+            if (bitmap == null || bitmap.isRecycled()) return;
+            android.graphics.Rect bounds = getBounds();
+            if (bounds.width() <= 0 || bounds.height() <= 0) return;
+            float scale = Math.max(bounds.width() / (float) bitmap.getWidth(),
+                    bounds.height() / (float) bitmap.getHeight());
+            float width = bitmap.getWidth() * scale;
+            float height = bitmap.getHeight() * scale;
+            RectF destination = new RectF(
+                    bounds.centerX() - width / 2f,
+                    bounds.centerY() - height / 2f,
+                    bounds.centerX() + width / 2f,
+                    bounds.centerY() + height / 2f);
+            canvas.save();
+            canvas.clipRect(bounds);
+            canvas.drawBitmap(bitmap, null, destination, imagePaint);
+            shadePaint.setShader(new LinearGradient(0f, bounds.top, 0f, bounds.bottom,
+                    new int[]{0x42000000, 0x18000000, 0x65000000},
+                    new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRect(bounds, shadePaint);
+            shadePaint.setShader(null);
+            canvas.restore();
+        }
+
+        @Override public void setAlpha(int alpha) {
+            imagePaint.setAlpha(alpha);
+            shadePaint.setAlpha(alpha);
+            invalidateSelf();
+        }
+
+        @Override public void setColorFilter(android.graphics.ColorFilter colorFilter) {
+            imagePaint.setColorFilter(colorFilter);
+            invalidateSelf();
+        }
+
+        @Override public int getOpacity() {
+            return android.graphics.PixelFormat.OPAQUE;
+        }
     }
 
     private void updatePlayerButtons() {

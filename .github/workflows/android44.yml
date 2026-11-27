@@ -9,7 +9,7 @@ permissions:
 
 # Keep only the newest branch build active; releases and asset commits must not race.
 concurrency:
-  group: nagan-android44-v259-${{ github.ref }}
+  group: nagan-android44-v260-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -70,14 +70,14 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.5.9
+          tag_name: v2.6.0
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.5.9
+          name: נגן Android 4.4 – v2.6.0
           body: |
-            גרסה 2.5.9 – תיקון יציבות וחזרה לממשק הנגן היציב של 2.5.7.
-            הוסרו השינויים הניסיוניים שהוכנסו ב-2.5.8 והשפיעו על שרשרת ההשמעה, מסך הניגון והרקעים.
-            נוסף Audio Focus סטנדרטי של Android: הנגן מבקש מיקוד לפני השמעה, משהה את עצמו כשנגן אחר מקבל מיקוד ומחדש השמעה לאחר איבוד מיקוד זמני.
-            יתר תכונות הנגן והעיצוב של 2.5.7 נשמרו.
+            גרסה 2.6.0 – שדרוג חזותי ממוקד למסך הניגון.
+            הרקע במסך הניגון נוצר מתמונת העטיפה, מטושטש ומוכהה, תוך שמירה על הגוונים שלה ועל קריאות הטקסט.
+            עטיפות אוטומטיות לשירים ללא תמונה קיבלו עיצוב עשיר בסגנון Lyrics Visual: תאורה רכה, שכבות צבע, צורות גאומטריות, מסגרת, טיפוגרפיה וגל קול.
+            מנגנון ההשמעה, הניווט והשליטה בשירים לא שונו.
           files: |
             releases/NaganMusic44-Android44.apk
             releases/NaganMusic44-source.zip
@@ -89,7 +89,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.5.9-debug-apk
+          name: nagan-android44-2.6.0-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
