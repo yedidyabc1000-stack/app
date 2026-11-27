@@ -18,7 +18,6 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.LinearGradient;
-import android.graphics.RadialGradient;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.Path;
@@ -153,15 +152,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private MediaPlayer player;
     private AudioManager audioManager;
     private RemoteControlClient remoteControlClient;
-    private boolean remoteControlRegistered = false;
-    private boolean mediaButtonReceiverRegistered = false;
     private boolean audioFocusGranted = false;
     private boolean resumeAfterTransientFocusLoss = false;
-    private boolean remoteListeningEnabled = false;
-    private int remoteListeningDistance = 55;
-    private int remoteListeningPreset = 0;
-    private RemoteListeningEffect remoteListeningEffect = new RemoteListeningEffect();
-    private RemoteListeningEffect preloadedListeningEffect = new RemoteListeningEffect();
     private final AudioManager.OnAudioFocusChangeListener audioFocusListener =
             new AudioManager.OnAudioFocusChangeListener() {
         @Override public void onAudioFocusChange(int focusChange) {
@@ -171,38 +163,30 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     if (player != null) {
                         try { player.setVolume(1f, 1f); } catch (IllegalStateException ignored) { }
                     }
-                    if (nextPlayer != null) {
-                        try { nextPlayer.setVolume(1f, 1f); } catch (IllegalStateException ignored) { }
-                    }
                     if (resumeAfterTransientFocusLoss && playerPrepared && player != null) {
                         resumeAfterTransientFocusLoss = false;
                         try {
                             player.start();
-                            if (crossfadeActive && nextPlayer != null) nextPlayer.start();
+                            if (crossfadeActive && nextPlayer != null && nextPlayerPrepared) nextPlayer.start();
                         } catch (IllegalStateException error) {
-                            Log.w(TAG, "Could not resume after audio focus returned", error);
+                            Log.w(TAG, "Could not resume after temporary audio focus loss", error);
                         }
+                        updatePlayerButtons();
                     }
-                    activateRemoteControlClient();
-                    updatePlayerButtons();
                     break;
                 case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
                     resumeAfterTransientFocusLoss = isPlaying();
-                    pausePlaybackForFocusLoss();
+                    pauseForAudioFocusLoss();
                     audioFocusGranted = false;
-                    deactivateRemoteControlClient();
                     break;
                 case AudioManager.AUDIOFOCUS_LOSS:
                     resumeAfterTransientFocusLoss = false;
-                    pausePlaybackForFocusLoss();
+                    pauseForAudioFocusLoss();
                     audioFocusGranted = false;
-                    deactivateRemoteControlClient();
                     break;
                 case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
-                    try {
-                        if (player != null && isPlaying()) player.setVolume(0.28f, 0.28f);
-                        if (nextPlayer != null && isMediaPlayerPlaying(nextPlayer)) nextPlayer.setVolume(0.28f, 0.28f);
-                    } catch (IllegalStateException ignored) { }
+                    try { if (player != null && isPlaying()) player.setVolume(0.25f, 0.25f); }
+                    catch (IllegalStateException ignored) { }
                     break;
             }
         }
@@ -238,10 +222,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private ArrayList<Entry> parentEntries = null;
     private String parentTitle = "";
     private int selectedPosition = 0;
-    private final ArrayList<BrowserScreenState> browserBackStack = new ArrayList<BrowserScreenState>();
-    private int pendingRestoreFirstVisible = -1;
-    private int pendingRestoreTop = 0;
-    private String browserSearchQuery = "";
 
     private LinearLayout root;
     private LinearLayout toolbar;
@@ -257,8 +237,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private BrowserAdapter adapter;
     private ArrayList<Entry> visibleEntries = new ArrayList<Entry>();
 
-    private FrameLayout nowPlayingRoot;
-    private ImageView nowBackground;
+    private LinearLayout nowPlayingRoot;
     private ImageView nowArt;
     private TextView nowTitle;
     private TextView nowArtist;
@@ -294,7 +273,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         @Override public void run() {
             if (isFinishing() || !hasStoragePermission()) return;
             detailLevel = 0; parentEntries = null; parentTitle = "";
-            browserBackStack.clear(); pendingRestoreFirstVisible = -1;
             loadLibraryAsync(false);
         }
     };
@@ -356,43 +334,21 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
-
-        android.content.SharedPreferences settings = getSharedPreferences(PREFS, MODE_PRIVATE);
-        remoteListeningEnabled = settings.getBoolean("remote_listening_enabled", false);
-        remoteListeningDistance = settings.getInt("remote_listening_distance", 55);
-        remoteListeningPreset = settings.getInt("remote_listening_preset", 0);
-        remoteListeningEffect.setSettings(remoteListeningEnabled, remoteListeningDistance, remoteListeningPreset);
-        preloadedListeningEffect.setSettings(remoteListeningEnabled, remoteListeningDistance, remoteListeningPreset);
-
         registerMediaControls();
         handler.post(progressRunnable);
         loadUserPlaylists();
         if (hasStoragePermission()) {
-            // Display immediately, then parse the potentially large JSON cache away from
-            // the UI thread. This matters particularly on older Android 4.4 hardware.
-            renderLoadingScreen();
-            final int token = ++libraryLoadToken;
-            Thread cacheWorker = new Thread(new Runnable() {
-                @Override public void run() {
-                    final ArrayList<Song> cachedSongs = readLibraryCache();
-                    handler.post(new Runnable() {
-                        @Override public void run() {
-                            if (isFinishing() || token != libraryLoadToken) return;
-                            if (cachedSongs.size() > 0) {
-                                reconcileLibrary(cachedSongs);
-                                loading = false;
-                                renderBrowser();
-                                prepareBrowserEntriesCacheAsync(new ArrayList<Song>(cachedSongs));
-                                scanMissingMoodTagsAsync();
-                            } else {
-                                loadLibraryAsync();
-                            }
-                        }
-                    });
-                }
-            }, "nagan-cache-load");
-            cacheWorker.setPriority(Thread.NORM_PRIORITY);
-            cacheWorker.start();
+            ArrayList<Song> cachedSongs = readLibraryCache();
+            if (cachedSongs.size() > 0) {
+                reconcileLibrary(cachedSongs);
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putString(LIBRARY_CACHE_KEY, serializeLibraryCache(allSongs)).apply();
+                renderBrowser();
+                prepareBrowserEntriesCacheAsync(new ArrayList<Song>(cachedSongs));
+                scanMissingMoodTagsAsync();
+            } else {
+                loadLibraryAsync();
+            }
         } else {
             renderPermissionScreen();
         }
@@ -410,7 +366,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         break;
                     case KeyEvent.KEYCODE_MEDIA_PAUSE:
                     case KeyEvent.KEYCODE_MEDIA_STOP:
-                        if (isPlaying() && player != null) pausePlaybackByUser();
+                        if (isPlaying() && player != null) {
+                            try { player.pause(); } catch (IllegalStateException ignored) { }
+                            updatePlayerButtons();
+                        }
                         break;
                     case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
                     case KeyEvent.KEYCODE_HEADSETHOOK:
@@ -440,6 +399,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             mediaButtonIntent.setComponent(mediaButtonReceiverComponent);
             mediaButtonPendingIntent = PendingIntent.getBroadcast(this, 0, mediaButtonIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT);
+            audioManager.registerMediaButtonEventReceiver(mediaButtonReceiverComponent);
             remoteControlClient = new RemoteControlClient(mediaButtonPendingIntent);
             remoteControlClient.setTransportControlFlags(
                     RemoteControlClient.FLAG_KEY_MEDIA_PLAY
@@ -461,10 +421,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                     seekToAbsolute((int) Math.max(0L, Math.min(Integer.MAX_VALUE, newPositionMs)));
                 }
             });
+            audioManager.registerRemoteControlClient(remoteControlClient);
             updateRemoteMetadata(null);
             updateRemotePlaybackState();
         } catch (RuntimeException error) {
-            Log.w(TAG, "Could not prepare Android remote media controls", error);
+            Log.w(TAG, "Could not register Android remote media controls", error);
             remoteControlClient = null;
         }
     }
@@ -473,18 +434,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (remoteControlClient != null) {
             try { remoteControlClient.setPlaybackState(RemoteControlClient.PLAYSTATE_STOPPED); }
             catch (RuntimeException ignored) { }
-            if (audioManager != null && remoteControlRegistered) {
+            if (audioManager != null) {
                 try { audioManager.unregisterRemoteControlClient(remoteControlClient); }
                 catch (RuntimeException ignored) { }
             }
-            remoteControlRegistered = false;
             remoteControlClient = null;
         }
-        if (audioManager != null && mediaButtonReceiverComponent != null && mediaButtonReceiverRegistered) {
+        if (audioManager != null && mediaButtonReceiverComponent != null) {
             try { audioManager.unregisterMediaButtonEventReceiver(mediaButtonReceiverComponent); }
             catch (RuntimeException ignored) { }
         }
-        mediaButtonReceiverRegistered = false;
         if (mediaCommandReceiver != null) {
             try { unregisterReceiver(mediaCommandReceiver); } catch (RuntimeException ignored) { }
             mediaCommandReceiver = null;
@@ -502,53 +461,20 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             int result = audioManager.requestAudioFocus(audioFocusListener,
                     AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
             audioFocusGranted = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-            if (audioFocusGranted) activateRemoteControlClient();
             return audioFocusGranted;
         } catch (RuntimeException error) {
-            Log.w(TAG, "Could not request audio focus", error);
+            Log.w(TAG, "Audio focus request failed", error);
             audioFocusGranted = false;
             return false;
         }
     }
 
-    private void activateRemoteControlClient() {
-        if (audioManager == null || remoteControlClient == null) return;
-        try {
-            if (mediaButtonReceiverComponent != null && !mediaButtonReceiverRegistered) {
-                audioManager.registerMediaButtonEventReceiver(mediaButtonReceiverComponent);
-                mediaButtonReceiverRegistered = true;
-            }
-            if (remoteControlRegistered) {
-                try { audioManager.unregisterRemoteControlClient(remoteControlClient); }
-                catch (RuntimeException ignored) { }
-                remoteControlRegistered = false;
-            }
-            audioManager.registerRemoteControlClient(remoteControlClient);
-            remoteControlRegistered = true;
-            updateRemoteMetadata(remoteArtworkBitmap);
-            updateRemotePlaybackState();
-        } catch (RuntimeException error) {
-            Log.w(TAG, "Could not activate Android lock-screen controls", error);
-        }
-    }
-
-    private void deactivateRemoteControlClient() {
-        if (remoteControlClient != null) {
-            try {
-                remoteControlClient.setPlaybackState(RemoteControlClient.PLAYSTATE_PAUSED,
-                        playerPrepared ? safePosition() : -1L, 0f);
-            } catch (RuntimeException ignored) { }
-            if (audioManager != null && remoteControlRegistered) {
-                try { audioManager.unregisterRemoteControlClient(remoteControlClient); }
-                catch (RuntimeException ignored) { }
-            }
-            remoteControlRegistered = false;
-        }
-        if (audioManager != null && mediaButtonReceiverComponent != null && mediaButtonReceiverRegistered) {
-            try { audioManager.unregisterMediaButtonEventReceiver(mediaButtonReceiverComponent); }
-            catch (RuntimeException ignored) { }
-            mediaButtonReceiverRegistered = false;
-        }
+    private void pauseForAudioFocusLoss() {
+        try { if (player != null && player.isPlaying()) player.pause(); }
+        catch (IllegalStateException ignored) { }
+        try { if (nextPlayer != null && nextPlayer.isPlaying()) nextPlayer.pause(); }
+        catch (IllegalStateException ignored) { }
+        updatePlayerButtons();
     }
 
     private void abandonPlaybackAudioFocus() {
@@ -558,38 +484,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             catch (RuntimeException ignored) { }
         }
         audioFocusGranted = false;
-    }
-
-    private void pausePlaybackForFocusLoss() {
-        if (crossfadeActive) cancelPreloadedPlayer();
-        try { if (player != null && isMediaPlayerPlaying(player)) player.pause(); }
-        catch (IllegalStateException ignored) { }
-        try { if (nextPlayer != null && isMediaPlayerPlaying(nextPlayer)) nextPlayer.pause(); }
-        catch (IllegalStateException ignored) { }
-        updatePlayerButtons();
-    }
-
-    private void pausePlaybackByUser() {
-        resumeAfterTransientFocusLoss = false;
-        try {
-            if (player != null && isMediaPlayerPlaying(player)) player.pause();
-            if (nextPlayer != null && isMediaPlayerPlaying(nextPlayer)) nextPlayer.pause();
-        } catch (IllegalStateException ignored) { }
-        // Retain focus while paused so the lock-screen transport remains available.
-        // A different player will take focus and this client will then unregister.
-        updatePlayerButtons();
-    }
-
-    private void persistRemoteListeningSettings() {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putBoolean("remote_listening_enabled", remoteListeningEnabled)
-                .putInt("remote_listening_distance", remoteListeningDistance)
-                .putInt("remote_listening_preset", remoteListeningPreset)
-                .apply();
-        remoteListeningEffect.setSettings(remoteListeningEnabled,
-                remoteListeningDistance, remoteListeningPreset);
-        preloadedListeningEffect.setSettings(remoteListeningEnabled,
-                remoteListeningDistance, remoteListeningPreset);
     }
 
     private void updateRemotePlaybackState() {
@@ -1094,7 +988,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         artworkCache.evictAll();
         if (oldCurrent != null) {
             Song updated = byId.get(oldCurrent.id);
-            if (updated == null) { releasePlayer(); abandonPlaybackAudioFocus(); deactivateRemoteControlClient(); currentSong = null; queue.clear(); queueIndex = -1; }
+            if (updated == null) { releasePlayer(); currentSong = null; queue.clear(); queueIndex = -1; }
             else currentSong = updated;
         }
         cancelPreloadedPlayer();
@@ -1169,9 +1063,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 });
         addHomeRow(page, "שירים", "", allSongs.size() + " שירים", "≡", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_SONGS, "שירים"); } });
-        addHomeRow(page, "אמנים", "", "רשימת אמנים", "♬", compact, compactRowHeight,
+        addHomeRow(page, "אמנים", "", artistIndex().size() + " אמנים", "♬", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ARTISTS, "אמנים"); } });
-        addHomeRow(page, "אלבומים", "", "ספריית אלבומים", "▤", compact, compactRowHeight,
+        addHomeRow(page, "אלבומים", "", albumGroups(allSongs).size() + " אלבומים", "▤", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
         addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☰", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_PLAYLISTS, "פלייליסטים"); } });
@@ -1244,9 +1138,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void openHomeCategory(int tab, String title) {
-        browserBackStack.clear();
-        pendingRestoreFirstVisible = -1;
-        browserSearchQuery = "";
         activeTab = tab;
         detailLevel = 0;
         parentEntries = null;
@@ -1322,18 +1213,15 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             search.setHintTextColor(COLOR_SUB);
             search.setPadding(dp(12), 0, dp(12), 0);
             search.setBackgroundDrawable(roundRect(0xffffffff, 7));
-            search.setText(browserSearchQuery);
-            if (browserSearchQuery.length() > 0) adapter.filter(browserSearchQuery);
             LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(-1, dp(46));
             searchParams.setMargins(dp(8), dp(7), dp(8), dp(7));
             browserContent.addView(search, searchParams);
             search.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
                 @Override public void onTextChanged(CharSequence value, int start, int before, int count) {
-                    browserSearchQuery = value == null ? "" : value.toString();
                     if (adapter != null) {
                         selectedPosition = 0;
-                        adapter.filter(browserSearchQuery);
+                        adapter.filter(value.toString());
                         if (listView != null) listView.setSelection(0);
                     }
                 }
@@ -1386,20 +1274,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         setContentView(root);
         updateTabs();
         listView.requestFocus();
-        if (pendingRestoreFirstVisible >= 0) {
-            final int firstVisible = pendingRestoreFirstVisible;
-            final int topOffset = pendingRestoreTop;
-            pendingRestoreFirstVisible = -1;
-            listView.post(new Runnable() {
-                @Override public void run() {
-                    if (listView == null || adapter == null || adapter.getCount() == 0) return;
-                    int safePosition = Math.max(0, Math.min(firstVisible, adapter.getCount() - 1));
-                    listView.setSelectionFromTop(safePosition + listView.getHeaderViewsCount(), topOffset);
-                }
-            });
-        } else if (selectedPosition >= 0 && selectedPosition < (adapter == null ? 0 : adapter.getCount())) {
-            listView.setSelection(selectedPosition + listView.getHeaderViewsCount());
-        }
+        if (selectedPosition >= 0 && selectedPosition < (adapter == null ? 0 : adapter.getCount())) listView.setSelection(selectedPosition + listView.getHeaderViewsCount());
     }
 
     private void addTab(String label, final int tab) {
@@ -1422,9 +1297,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void switchToTab(final int tab) {
-        browserBackStack.clear();
-        pendingRestoreFirstVisible = -1;
-        browserSearchQuery = "";
         if (detailLevel != 0) {
             detailLevel = 0;
             parentEntries = null;
@@ -1787,48 +1659,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void showEntries(String title, ArrayList<Entry> entries) {
-        pushCurrentBrowserState();
+        if (detailLevel == 1) {
+            parentEntries = new ArrayList<Entry>(visibleEntries);
+            parentTitle = detailTitle;
+        }
         detailLevel++;
         detailTitle = title;
         visibleEntries.clear();
         visibleEntries.addAll(entries);
         selectedPosition = 0;
-        browserSearchQuery = "";
-        pendingRestoreFirstVisible = -1;
         renderBrowser();
-    }
-
-
-    private void pushCurrentBrowserState() {
-        if (detailLevel <= 0 || showingNowPlaying) return;
-        BrowserScreenState state = new BrowserScreenState();
-        state.tab = activeTab;
-        state.detailLevel = detailLevel;
-        state.title = detailTitle;
-        state.entries = new ArrayList<Entry>(visibleEntries);
-        state.selectedPosition = selectedPosition;
-        state.searchQuery = browserSearchQuery;
-        state.firstVisiblePosition = 0;
-        state.firstVisibleTop = 0;
-        if (listView != null) {
-            state.firstVisiblePosition = Math.max(0, listView.getFirstVisiblePosition());
-            View first = listView.getChildAt(0);
-            if (first != null) state.firstVisibleTop = first.getTop();
-        }
-        browserBackStack.add(state);
-    }
-
-    private void restoreBrowserScreen(BrowserScreenState state) {
-        if (state == null) return;
-        activeTab = state.tab;
-        detailLevel = state.detailLevel;
-        detailTitle = state.title;
-        visibleEntries.clear();
-        if (state.entries != null) visibleEntries.addAll(state.entries);
-        selectedPosition = state.selectedPosition;
-        browserSearchQuery = state.searchQuery == null ? "" : state.searchQuery;
-        pendingRestoreFirstVisible = state.firstVisiblePosition;
-        pendingRestoreTop = state.firstVisibleTop;
     }
 
     private void showTrackList(String title, ArrayList<Song> songs) {
@@ -2261,16 +2101,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         showingNowPlaying = true;
         shuffleButton = null;
         repeatButton = null;
-        nowPlayingRoot = new FrameLayout(this);
-        nowPlayingRoot.setBackgroundColor(0xff101014);
-        nowBackground = new ImageView(this);
-        nowBackground.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        nowPlayingRoot.addView(nowBackground, new FrameLayout.LayoutParams(-1, -1));
-        View backgroundShade = new View(this);
-        backgroundShade.setBackgroundColor(0x70000000);
-        nowPlayingRoot.addView(backgroundShade, new FrameLayout.LayoutParams(-1, -1));
+        nowPlayingRoot = new LinearLayout(this);
+        nowPlayingRoot.setOrientation(LinearLayout.VERTICAL);
+        nowPlayingRoot.setBackgroundColor(COLOR_BG);
 
-        // Use the cover itself as a darkened, heavily blurred full-screen background.
+        // Fixed layout. Artwork leaves enough room for the timeline and controls.
         // after the song details, timeline and transport controls are placed.
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -2283,9 +2118,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArt.setScaleX(isPlaying() ? 1f : 0.94f);
         nowArt.setScaleY(isPlaying() ? 1f : 0.94f);
         nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
-        artHolder.setBackgroundColor(0x00000000);
+        artHolder.setBackgroundColor(COLOR_BG);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 0.94f);
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 1.02f);
         artParams.topMargin = dp(10);
         artParams.bottomMargin = dp(3);
         content.addView(artHolder, artParams);
@@ -2297,8 +2132,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArtist = text(currentSong == null ? "" : currentSong.artist, 13, COLOR_SUB, false);
         nowArtist.setGravity(Gravity.CENTER);
         content.addView(nowArtist, new LinearLayout.LayoutParams(-1, dp(15)));
-        content.addView(createRemoteListeningPanel(), new LinearLayout.LayoutParams(-1, -2));
-        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.02f));
+        content.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 0.05f));
 
         LinearLayout timeline = new LinearLayout(this);
         timeline.setOrientation(LinearLayout.HORIZONTAL);
@@ -2372,138 +2206,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         controls.addView(next, nextParams);
         content.addView(controls, new LinearLayout.LayoutParams(-1, dp(54)));
 
-        nowPlayingRoot.addView(content, new FrameLayout.LayoutParams(-1, -1));
+        nowPlayingRoot.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(nowPlayingRoot);
         loadArtworkAsync(currentSong, nowArt);
         updatePlayerButtons();
-    }
-
-
-    private LinearLayout createRemoteListeningPanel() {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(0, dp(1), 0, dp(2));
-
-        final TextView toggle = text(remoteListeningEnabled
-                ? "האזנה מרוחקת  ·  פעיל" : "האזנה מרוחקת  ·  כבוי",
-                13, 0xffffffff, true);
-        toggle.setGravity(Gravity.CENTER);
-        toggle.setPadding(dp(12), 0, dp(12), 0);
-        toggle.setBackgroundDrawable(roundRect(remoteListeningEnabled ? 0xff247f89 : 0xff464646, 16));
-        panel.addView(toggle, new LinearLayout.LayoutParams(-1, dp(28)));
-        toggle.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                remoteListeningEnabled = !remoteListeningEnabled;
-                toggle.setText(remoteListeningEnabled
-                        ? "האזנה מרוחקת  ·  פעיל" : "האזנה מרוחקת  ·  כבוי");
-                toggle.setBackgroundDrawable(roundRect(remoteListeningEnabled ? 0xff247f89 : 0xff464646, 16));
-                persistRemoteListeningSettings();
-            }
-        });
-
-        LinearLayout distanceRow = new LinearLayout(this);
-        distanceRow.setOrientation(LinearLayout.HORIZONTAL);
-        distanceRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView near = text("קרוב", 11, 0xffeeeeee, false);
-        near.setGravity(Gravity.CENTER);
-        distanceRow.addView(near, new LinearLayout.LayoutParams(dp(34), dp(30)));
-        SeekBar distance = new SeekBar(this);
-        distance.setMax(100);
-        distance.setProgress(remoteListeningDistance);
-        distance.setContentDescription("מרחק האזנה");
-        distanceRow.addView(distance, new LinearLayout.LayoutParams(0, dp(32), 1f));
-        final TextView amount = text("רחוק " + remoteListeningDistance + "%", 11, 0xffeeeeee, false);
-        amount.setGravity(Gravity.CENTER);
-        distanceRow.addView(amount, new LinearLayout.LayoutParams(dp(42), dp(30)));
-        panel.addView(distanceRow, new LinearLayout.LayoutParams(-1, dp(32)));
-        distance.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
-                if (!fromUser) return;
-                remoteListeningDistance = value;
-                amount.setText("רחוק " + value + "%");
-                persistRemoteListeningSettings();
-            }
-            @Override public void onStartTrackingTouch(SeekBar bar) { }
-            @Override public void onStopTrackingTouch(SeekBar bar) { }
-        });
-
-        LinearLayout presets = new LinearLayout(this);
-        presets.setOrientation(LinearLayout.HORIZONTAL);
-        presets.setGravity(Gravity.CENTER);
-        final String[] labels = new String[]{"סלון", "בית קפה", "חדר שינה"};
-        final TextView[] buttons = new TextView[labels.length];
-        for (int i = 0; i < labels.length; i++) {
-            final int index = i;
-            TextView item = text(labels[i], 11, 0xffffffff, true);
-            item.setGravity(Gravity.CENTER);
-            item.setPadding(dp(3), 0, dp(3), 0);
-            item.setBackgroundDrawable(roundRect(remoteListeningPreset == index ? 0xff247f89 : 0xff555555, 7));
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(27), 1f);
-            if (i > 0) params.leftMargin = dp(4);
-            presets.addView(item, params);
-            buttons[i] = item;
-            item.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    remoteListeningPreset = index;
-                    for (int j = 0; j < buttons.length; j++) {
-                        buttons[j].setBackgroundDrawable(roundRect(
-                                j == remoteListeningPreset ? 0xff247f89 : 0xff555555, 7));
-                    }
-                    persistRemoteListeningSettings();
-                }
-            });
-        }
-        panel.addView(presets, new LinearLayout.LayoutParams(-1, dp(29)));
-        return panel;
-    }
-
-    private Bitmap createBlurredArtworkBackground(Bitmap source) {
-        if (source == null || source.isRecycled() || source.getWidth() <= 0 || source.getHeight() <= 0) return null;
-        final int width = 96, height = 96;
-        Bitmap sample = null;
-        try {
-            sample = Bitmap.createScaledBitmap(source, width, height, true);
-            int[] pixels = new int[width * height];
-            sample.getPixels(pixels, 0, width, 0, 0, width, height);
-            int[] scratch = new int[pixels.length];
-            for (int pass = 0; pass < 3; pass++) {
-                blurPass(pixels, scratch, width, height, 9, true);
-                blurPass(scratch, pixels, width, height, 9, false);
-            }
-            return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888);
-        } catch (RuntimeException error) {
-            Log.d(TAG, "Could not create blurred cover background", error);
-            return null;
-        } finally {
-            if (sample != null && sample != source && !sample.isRecycled()) sample.recycle();
-        }
-    }
-
-    private void blurPass(int[] source, int[] destination, int width, int height,
-                          int radius, boolean horizontal) {
-        int lines = horizontal ? height : width;
-        int length = horizontal ? width : height;
-        for (int line = 0; line < lines; line++) {
-            for (int position = 0; position < length; position++) {
-                long red = 0L, green = 0L, blue = 0L, alpha = 0L;
-                int count = 0;
-                int start = Math.max(0, position - radius);
-                int finish = Math.min(length - 1, position + radius);
-                for (int offset = start; offset <= finish; offset++) {
-                    int index = horizontal ? line * width + offset : offset * width + line;
-                    int color = source[index];
-                    alpha += (color >>> 24) & 0xff;
-                    red += (color >>> 16) & 0xff;
-                    green += (color >>> 8) & 0xff;
-                    blue += color & 0xff;
-                    count++;
-                }
-                int color = ((int)(alpha/count) << 24) | ((int)(red/count) << 16)
-                        | ((int)(green/count) << 8) | (int)(blue/count);
-                int target = horizontal ? line * width + position : position * width + line;
-                destination[target] = color;
-            }
-        }
     }
 
     private void loadArtworkAsync(final Song song, final ImageView target) {
@@ -2513,7 +2219,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() {
                 final Bitmap bitmap = loadArtwork(song);
                 if (bitmap == null) return;
-                final Bitmap blurredBackground = createBlurredArtworkBackground(bitmap);
                 handler.post(new Runnable() {
                     @Override public void run() {
                         if (isFinishing() || currentSong == null || currentSong.id != songId
@@ -2523,7 +2228,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         }
                         target.setImageBitmap(bitmap);
                         fitArtworkViewToBitmap(target, bitmap);
-                        applyNowPlayingBackground(blurredBackground, target);
+                        applyNowPlayingBackground(bitmap, target);
                         updateRemoteMetadata(bitmap);
                     }
                 });
@@ -2796,13 +2501,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private Bitmap createGeneratedArtwork(Song song) {
         final int size = 720;
         int[][] palettes = new int[][]{
-                {0xff101d35, 0xff59417b, 0xff101a2a},
-                {0xff102b32, 0xff34777a, 0xff101b25},
-                {0xff351c2e, 0xff8b4359, 0xff1d162e},
-                {0xff30271f, 0xff9b7447, 0xff171e2a},
-                {0xff152b29, 0xff4d7460, 0xff101b24},
-                {0xff1b2540, 0xff486b88, 0xff171a2c},
-                {0xff34202b, 0xff8f5a51, 0xff1e1931}
+                {0xff16213e, 0xff533483, 0xff0f3460},
+                {0xff12343b, 0xff1f6f78, 0xff0b1f2a},
+                {0xff3b1f2b, 0xff7b2d45, 0xff2b193d},
+                {0xff302b24, 0xff745b35, 0xff25201c},
+                {0xff172a24, 0xff41644d, 0xff13221b},
+                {0xff20243b, 0xff3e5c76, 0xff1b263b}
         };
         String title = displaySongTitle(song.title);
         String artist = clean(song.artist, "אמן לא ידוע");
@@ -2818,78 +2522,40 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 new int[]{palette[0], palette[1], palette[2]}, null, Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, size, size, background);
 
-        Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
-        glow.setShader(new RadialGradient(size * 0.72f, size * 0.25f, size * 0.58f,
-                new int[]{0x557fffff, 0x227fffff, 0x00000000}, null, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, size, size, glow);
-        glow.setShader(new RadialGradient(size * 0.18f, size * 0.82f, size * 0.52f,
-                new int[]{0x559e62c9, 0x229e62c9, 0x00000000}, null, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, size, size, glow);
+        Paint decoration = new Paint(Paint.ANTI_ALIAS_FLAG);
+        decoration.setStyle(Paint.Style.STROKE);
+        decoration.setStrokeWidth(3f);
+        decoration.setColor(0x22ffffff);
+        canvas.drawCircle(size * 0.82f, size * 0.20f, size * 0.23f, decoration);
+        canvas.drawCircle(size * 0.82f, size * 0.20f, size * 0.31f, decoration);
+        decoration.setColor(0x18ffffff);
+        decoration.setStyle(Paint.Style.FILL);
+        canvas.drawCircle(size * 0.13f, size * 0.88f, size * 0.20f, decoration);
 
-        Paint shade = new Paint(Paint.ANTI_ALIAS_FLAG);
-        shade.setShader(new LinearGradient(0, 0, 0, size,
-                new int[]{0x33000000, 0x11000000, 0x99000000}, null, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, size, size, shade);
-
-        Paint geometry = new Paint(Paint.ANTI_ALIAS_FLAG);
-        geometry.setStyle(Paint.Style.STROKE);
-        geometry.setStrokeWidth(2.2f);
-        geometry.setColor(0x26ffffff);
-        canvas.drawCircle(size * 0.83f, size * 0.18f, size * 0.22f, geometry);
-        geometry.setColor(0x16ffffff);
-        canvas.drawCircle(size * 0.83f, size * 0.18f, size * 0.30f, geometry);
-        Path wave = new Path();
-        wave.moveTo(-20, size * 0.22f);
-        wave.cubicTo(size * 0.20f, size * 0.10f, size * 0.42f, size * 0.37f, size * 0.70f, size * 0.24f);
-        wave.cubicTo(size * 0.88f, size * 0.17f, size * 0.97f, size * 0.22f, size + 20, size * 0.12f);
-        geometry.setStrokeWidth(3f);
-        geometry.setColor(0x20ffffff);
-        canvas.drawPath(wave, geometry);
-
-        TextPaint eyebrow = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        eyebrow.setColor(0xbbeeeaf4);
-        eyebrow.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        eyebrow.setTextSize(20f);
-        String label = "M U S I C   V I S U A L";
-        canvas.drawText(label, (size - eyebrow.measureText(label)) / 2f, size * 0.30f, eyebrow);
-
-        int textWidth = size - 112;
+        int textWidth = size - 124;
         TextPaint titlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(0xfffaf8f4);
+        titlePaint.setColor(0xfffaf8f3);
         titlePaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        titlePaint.setTextSize(title.length() > 42 ? 48f : (title.length() > 26 ? 56f : 66f));
+        titlePaint.setTextSize(title.length() > 42 ? 49f : (title.length() > 26 ? 56f : 65f));
         TextPaint artistPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        artistPaint.setColor(0xffe2dce8);
-        artistPaint.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-        artistPaint.setTextSize(31f);
+        artistPaint.setColor(0xffe8e7e2);
+        artistPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        artistPaint.setTextSize(36f);
 
         StaticLayout titleLayout = new StaticLayout(title, titlePaint, textWidth,
-                Layout.Alignment.ALIGN_CENTER, 1.08f, 0f, true);
+                Layout.Alignment.ALIGN_CENTER, 1.10f, 0f, true);
         StaticLayout artistLayout = new StaticLayout(artist, artistPaint, textWidth,
-                Layout.Alignment.ALIGN_CENTER, 1.12f, 0f, true);
-        int gap = dp(20);
+                Layout.Alignment.ALIGN_CENTER, 1.10f, 0f, true);
+        int gap = dp(18);
         int totalHeight = titleLayout.getHeight() + gap + artistLayout.getHeight();
-        float y = Math.max(size * 0.40f, (size - totalHeight) / 2f);
+        float y = Math.max(70f, (size - totalHeight) / 2f);
 
-        Paint accent = new Paint(Paint.ANTI_ALIAS_FLAG);
-        accent.setColor(0x99ffffff);
-        accent.setStrokeWidth(2f);
-        float lineWidth = size * 0.16f;
-        canvas.drawLine((size-lineWidth)/2f, y-dp(22), (size+lineWidth)/2f, y-dp(22), accent);
         canvas.save();
-        canvas.translate(56f, y);
+        canvas.translate(62f, y);
         titleLayout.draw(canvas);
         canvas.translate(0f, titleLayout.getHeight() + gap);
         artistLayout.draw(canvas);
         canvas.restore();
-
-        Random grain = new Random((title + artist).hashCode());
-        Paint grainPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        grainPaint.setColor(0x12ffffff);
-        for (int i = 0; i < 950; i++) {
-            float x = grain.nextInt(size), yy = grain.nextInt(size);
-            canvas.drawCircle(x, yy, 0.7f + grain.nextFloat() * 0.8f, grainPaint);
-        }
         return bitmap;
     }
 
@@ -2913,14 +2579,63 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     /** Pick the most common coarse color from the cover and fade it into a pale tint. */
-    private void applyNowPlayingBackground(Bitmap blurredBitmap, ImageView target) {
-        if (target == null || nowArt != target || currentSong == null) return;
-        if (nowBackground != null && blurredBitmap != null && !blurredBitmap.isRecycled()) {
-            nowBackground.setImageBitmap(blurredBitmap);
+    private int fadedArtworkBackgroundColor(Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled() || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) {
+            return COLOR_BG;
         }
+        final int bins = 4096;
+        int[] counts = new int[bins];
+        long[] red = new long[bins];
+        long[] green = new long[bins];
+        long[] blue = new long[bins];
+        int stepX = Math.max(1, bitmap.getWidth() / 32);
+        int stepY = Math.max(1, bitmap.getHeight() / 32);
+        for (int y = stepY / 2; y < bitmap.getHeight(); y += stepY) {
+            for (int x = stepX / 2; x < bitmap.getWidth(); x += stepX) {
+                int pixel = bitmap.getPixel(x, y);
+                int alpha = (pixel >>> 24) & 0xff;
+                if (alpha < 128) continue;
+                int r = (pixel >>> 16) & 0xff;
+                int g = (pixel >>> 8) & 0xff;
+                int b = pixel & 0xff;
+                int bin = ((r >>> 4) << 8) | ((g >>> 4) << 4) | (b >>> 4);
+                counts[bin]++;
+                red[bin] += r;
+                green[bin] += g;
+                blue[bin] += b;
+            }
+        }
+        int dominant = -1;
+        for (int i = 0; i < bins; i++) {
+            if (dominant < 0 || counts[i] > counts[dominant]) dominant = i;
+        }
+        if (dominant < 0 || counts[dominant] == 0) return COLOR_BG;
+        int r = (int) (red[dominant] / counts[dominant]);
+        int g = (int) (green[dominant] / counts[dominant]);
+        int b = (int) (blue[dominant] / counts[dominant]);
+        // Keep the shade light, but make the cover's hue noticeably visible.
+        float[] hsv = new float[3];
+        android.graphics.Color.colorToHSV(android.graphics.Color.rgb(r, g, b), hsv);
+        if (hsv[1] < 0.12f) hsv[1] = 0.22f;
+        else hsv[1] = Math.min(0.42f, Math.max(0.30f, hsv[1] * 0.88f));
+        hsv[2] = 0.97f;
+        return android.graphics.Color.HSVToColor(hsv);
     }
 
-    
+    private void applyNowPlayingBackground(Bitmap bitmap, ImageView target) {
+        if (target == null || nowArt != target || currentSong == null || target.getParent() == null) return;
+        int paleColor = fadedArtworkBackgroundColor(bitmap);
+        if (nowPlayingRoot != null) {
+            nowPlayingRoot.setBackgroundColor(paleColor);
+            // Color the full content area too, so no transparent-parent/theme
+            // behavior can hide the artwork-derived tint on older Android builds.
+            if (nowPlayingRoot.getChildCount() > 0) {
+                nowPlayingRoot.getChildAt(0).setBackgroundColor(paleColor);
+            }
+        }
+        View holder = (View) target.getParent();
+        holder.setBackgroundColor(paleColor);
+    }
 
     private void updatePlayerButtons() {
         boolean playing = isPlaying();
@@ -3512,9 +3227,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 @Override public void onPrepared(MediaPlayer mp) {
                     if (mp != nextPlayer) return;
                     nextPlayerPrepared = true;
-                    preloadedListeningEffect.setSettings(remoteListeningEnabled,
-                            remoteListeningDistance, remoteListeningPreset);
-                    preloadedListeningEffect.attach(mp);
                     try { mp.setVolume(0f, 0f); }
                     catch (IllegalStateException error) {
                         Log.w(TAG, "Could not prepare crossfade volume", error);
@@ -3545,7 +3257,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nextSong = null;
         nextQueueIndex = -1;
         nextPlayerPrepared = false;
-        preloadedListeningEffect.release();
         if (old != null) {
             try {
                 old.setOnPreparedListener(null);
@@ -3600,11 +3311,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         crossfadeActive = false;
         crossfadeElapsedMs = 0L;
         crossfadeLastTickRealtime = 0L;
-
-        RemoteListeningEffect oldEffect = remoteListeningEffect;
-        remoteListeningEffect = preloadedListeningEffect;
-        preloadedListeningEffect = oldEffect;
-        preloadedListeningEffect.release();
 
         player = promoted;
         currentSong = promotedSong;
@@ -3753,13 +3459,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (mp == null || mp != player) return;
         playerPrepared = true;
         resetListenTracker();
-        remoteListeningEffect.setSettings(remoteListeningEnabled,
-                remoteListeningDistance, remoteListeningPreset);
-        remoteListeningEffect.attach(mp);
-        if (!requestPlaybackAudioFocus()) {
-            updatePlayerButtons();
-            return;
-        }
+        // Some Android 4.4 vendor builds report focus failures spuriously;
+        // attempt the normal request without blocking the actual MediaPlayer start.
+        requestPlaybackAudioFocus();
         try {
             mp.setVolume(1f, 1f);
             mp.start();
@@ -3817,7 +3519,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (next < 0) {
             releasePlayer();
             abandonPlaybackAudioFocus();
-            deactivateRemoteControlClient();
             updatePlayerButtons();
             return;
         }
@@ -3880,7 +3581,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             queueIndex = -1;
             forcedNextSongId = -1L;
             abandonPlaybackAudioFocus();
-            deactivateRemoteControlClient();
             updateRemoteMetadata(null);
             updatePlayerButtons();
             if (showingNowPlaying) renderNowPlaying();
@@ -3906,13 +3606,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             else if (allSongs.size() > 0) startTrack(allSongs, 0);
             return;
         }
-        if (!playerPrepared) return;
         try {
             if (player.isPlaying()) {
-                pausePlaybackByUser();
-                return;
+                player.pause();
+                if (crossfadeActive && nextPlayer != null && isMediaPlayerPlaying(nextPlayer)) nextPlayer.pause();
             } else {
-                if (!requestPlaybackAudioFocus()) return;
+                requestPlaybackAudioFocus();
                 player.start();
                 if (crossfadeActive && nextPlayer != null && !isMediaPlayerPlaying(nextPlayer)) nextPlayer.start();
             }
@@ -3952,7 +3651,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private void releasePlayer() {
         cancelPreloadedPlayer();
-        remoteListeningEffect.release();
         playerPrepared = false;
         currentTrackListenMs = 0L;
         lastListenSampleRealtime = 0L;
@@ -4006,14 +3704,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     @Override public void onBackPressed() {
         if (showingNowPlaying) {
-            showingNowPlaying = false;
-            activeTab = lastContentTab;
-            renderBrowser();
-            return;
+            showingNowPlaying = false; activeTab = lastContentTab; renderBrowser(); return;
         }
-        if (!browserBackStack.isEmpty()) {
-            BrowserScreenState previous = browserBackStack.remove(browserBackStack.size() - 1);
-            restoreBrowserScreen(previous);
+        if (detailLevel > 1 && parentEntries != null) {
+            detailLevel = 1;
+            detailTitle = parentTitle;
+            visibleEntries.clear();
+            visibleEntries.addAll(parentEntries);
+            parentEntries = null;
+            parentTitle = "";
+            selectedPosition = 0;
             renderBrowser();
             return;
         }
@@ -4022,10 +3722,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             detailTitle = "";
             parentEntries = null;
             parentTitle = "";
-            visibleEntries.clear();
             selectedPosition = 0;
-            browserSearchQuery = "";
-            pendingRestoreFirstVisible = -1;
             renderBrowser();
             return;
         }
@@ -4452,17 +4149,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         final String title;
         final ArrayList<Song> songs = new ArrayList<Song>();
         AlbumGroup(String title) { this.title = title; }
-    }
-
-    private static class BrowserScreenState {
-        int tab;
-        int detailLevel;
-        String title;
-        ArrayList<Entry> entries;
-        int selectedPosition;
-        int firstVisiblePosition;
-        int firstVisibleTop;
-        String searchQuery;
     }
 
     private static class Entry {

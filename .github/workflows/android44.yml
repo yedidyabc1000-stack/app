@@ -9,7 +9,7 @@ permissions:
 
 # Keep only the newest branch build active; releases and asset commits must not race.
 concurrency:
-  group: nagan-android44-v258-${{ github.ref }}
+  group: nagan-android44-v259-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -70,18 +70,14 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.5.8
+          tag_name: v2.5.9
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.5.8
+          name: נגן Android 4.4 – v2.5.9
           body: |
-            גרסה 2.5.8 של נגן המוזיקה, תואמת Android 4.4 (API 19) ומעלה.
-            בקשת Audio Focus מתבצעת לפני תחילת נגינה; בעת איבוד מיקוד הנגן משהה את עצמו ומפנה את בקרת המדיה לנגן הפעיל, ובאיבוד זמני ניתן לחדש נגינה כשהמיקוד חוזר.
-            RemoteControlClient נרשם כאשר הנגן מקבל מיקוד אודיו כדי לשפר את הופעת בקרי המדיה במסך הנעילה ובמערכת.
-            עטיפות אוטומטיות לשירים ללא עטיפה קיבלו עיצוב גרפי עשיר יותר בסגנון visualizer/lyric-video, ונוצרות מקומית ללא הורדת תמונות.
-            מסך הניגון משתמש בתמונת האלבום עצמה כרקע מסך מלא, מטושטש מאוד ומוחשך.
-            טעינת וניתוח מטמון הספרייה הועברו ל-thread רקע, והחישובים הכבדים במסך הבית צומצמו כדי להציג את הממשק מוקדם יותר.
-            ניווט פנימי שומר מחסנית מסכים, בחירה ומיקום גלילה, לרבות חזרה מאלבום של אמן לרשימת האלבומים של אותו אמן.
-            נוסף מצב ניסיוני "האזנה מרוחקת" עם מתג, סליידר מרחק ושלושה פריסטים. המודול משתמש ב-Equalizer וב-EnvironmentalReverb של Android, ומתאים את הפרמטרים בהדרגה בזמן ההשמעה.
+            גרסה 2.5.9 – תיקון יציבות וחזרה לממשק הנגן היציב של 2.5.7.
+            הוסרו השינויים הניסיוניים שהוכנסו ב-2.5.8 והשפיעו על שרשרת ההשמעה, מסך הניגון והרקעים.
+            נוסף Audio Focus סטנדרטי של Android: הנגן מבקש מיקוד לפני השמעה, משהה את עצמו כשנגן אחר מקבל מיקוד ומחדש השמעה לאחר איבוד מיקוד זמני.
+            יתר תכונות הנגן והעיצוב של 2.5.7 נשמרו.
           files: |
             releases/NaganMusic44-Android44.apk
             releases/NaganMusic44-source.zip
@@ -93,7 +89,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.5.8-debug-apk
+          name: nagan-android44-2.5.9-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14
