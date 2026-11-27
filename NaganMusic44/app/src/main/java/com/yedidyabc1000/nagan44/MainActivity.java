@@ -168,11 +168,17 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             switch (focusChange) {
                 case AudioManager.AUDIOFOCUS_GAIN:
                     audioFocusGranted = true;
+                    if (player != null) {
+                        try { player.setVolume(1f, 1f); } catch (IllegalStateException ignored) { }
+                    }
+                    if (nextPlayer != null) {
+                        try { nextPlayer.setVolume(1f, 1f); } catch (IllegalStateException ignored) { }
+                    }
                     if (resumeAfterTransientFocusLoss && playerPrepared && player != null) {
                         resumeAfterTransientFocusLoss = false;
                         try {
-                            player.setVolume(1f, 1f);
                             player.start();
+                            if (crossfadeActive && nextPlayer != null) nextPlayer.start();
                         } catch (IllegalStateException error) {
                             Log.w(TAG, "Could not resume after audio focus returned", error);
                         }
@@ -2398,7 +2404,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         LinearLayout distanceRow = new LinearLayout(this);
         distanceRow.setOrientation(LinearLayout.HORIZONTAL);
         distanceRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView near = text("קרוב", 11, COLOR_TEXT, false);
+        TextView near = text("קרוב", 11, 0xffeeeeee, false);
         near.setGravity(Gravity.CENTER);
         distanceRow.addView(near, new LinearLayout.LayoutParams(dp(34), dp(30)));
         SeekBar distance = new SeekBar(this);
@@ -2406,7 +2412,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         distance.setProgress(remoteListeningDistance);
         distance.setContentDescription("מרחק האזנה");
         distanceRow.addView(distance, new LinearLayout.LayoutParams(0, dp(32), 1f));
-        final TextView amount = text(remoteListeningDistance + "%", 11, COLOR_SUB, false);
+        final TextView amount = text("רחוק " + remoteListeningDistance + "%", 11, 0xffeeeeee, false);
         amount.setGravity(Gravity.CENTER);
         distanceRow.addView(amount, new LinearLayout.LayoutParams(dp(42), dp(30)));
         panel.addView(distanceRow, new LinearLayout.LayoutParams(-1, dp(32)));
@@ -2414,7 +2420,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void onProgressChanged(SeekBar bar, int value, boolean fromUser) {
                 if (!fromUser) return;
                 remoteListeningDistance = value;
-                amount.setText(value + "%");
+                amount.setText("רחוק " + value + "%");
                 persistRemoteListeningSettings();
             }
             @Override public void onStartTrackingTouch(SeekBar bar) { }
@@ -2914,20 +2920,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
     }
 
-    private void applyNowPlayingBackground(Bitmap bitmap, ImageView target) {
-        if (target == null || nowArt != target || currentSong == null || target.getParent() == null) return;
-        int paleColor = fadedArtworkBackgroundColor(bitmap);
-        if (nowPlayingRoot != null) {
-            nowPlayingRoot.setBackgroundColor(paleColor);
-            // Color the full content area too, so no transparent-parent/theme
-            // behavior can hide the artwork-derived tint on older Android builds.
-            if (nowPlayingRoot.getChildCount() > 0) {
-                nowPlayingRoot.getChildAt(0).setBackgroundColor(paleColor);
-            }
-        }
-        View holder = (View) target.getParent();
-        holder.setBackgroundColor(paleColor);
-    }
+    
 
     private void updatePlayerButtons() {
         boolean playing = isPlaying();
@@ -3760,13 +3753,13 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (mp == null || mp != player) return;
         playerPrepared = true;
         resetListenTracker();
+        remoteListeningEffect.setSettings(remoteListeningEnabled,
+                remoteListeningDistance, remoteListeningPreset);
+        remoteListeningEffect.attach(mp);
         if (!requestPlaybackAudioFocus()) {
             updatePlayerButtons();
             return;
         }
-        remoteListeningEffect.setSettings(remoteListeningEnabled,
-                remoteListeningDistance, remoteListeningPreset);
-        remoteListeningEffect.attach(mp);
         try {
             mp.setVolume(1f, 1f);
             mp.start();
