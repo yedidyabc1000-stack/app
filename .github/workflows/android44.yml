@@ -9,7 +9,7 @@ permissions:
 
 # Keep only the newest branch build active; releases and asset commits must not race.
 concurrency:
-  group: nagan-android44-v261-${{ github.ref }}
+  group: nagan-android44-v262-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -70,16 +70,16 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.6.1
+          tag_name: v2.6.2
           target_commitish: ${{ github.ref_name }}
-          name: נגן Android 4.4 – v2.6.1
+          name: נגן Android 4.4 – v2.6.2
           body: |
-            גרסה 2.6.1 – שיפורי ממשק ונוחות שימוש.
-            פס ההתקדמות: הסמן נשאר גלוי בתחילת השיר, המסלול שטרם נוגן כהה והחלק שנוגן והסמן לבנים.
-            שופרו המרווחים בין כפתורי השליטה והוקטנה מעט הפעלה/השהיה; הנגן התחתון הוארך.
-            עטיפות אוטומטיות מקבלות בכל שיר זוג צבעים חיים משלו, עם מיזוג עדין וטיפוגרפיה מודגשת.
-            נשמר מיקום הגלילה בחזרה מתוך מסך אמן, ונוספה כותרת אמן גדולה מעל רשימת האלבומים או השירים.
-            מנגנון ההשמעה עצמו לא שונה.
+            גרסה 2.6.2 – שיפור מעבר בין שירים, ניווט ורשימת אמנים.
+            מעבר בין שירים שומר את תמונת העטיפה הקודמת עד שהתמונה החדשה נטענת, ללא הבהוב סמל תו נגינה.
+            ניווט האמן תומך ברמות נפרדות: שירים באלבום ← אלבומי האמן ← רשימת האמנים.
+            רשימת האמנים מסתמכת אך ורק על שדה אמן אלבום; ערך חסר נכנס תחת אמן לא ידוע.
+            העטיפות האוטומטיות כוללות טקסט צבעוני, גדול ועבה יותר, ללא העיגול העליון וללא פסי הגל בתחתית.
+            סמן פס ההתקדמות הוקטן.
           files: |
             releases/NaganMusic44-Android44.apk
             releases/NaganMusic44-source.zip
@@ -91,7 +91,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: nagan-android44-2.6.1-debug-apk
+          name: nagan-android44-2.6.2-debug-apk
           path: releases/NaganMusic44-Android44.apk
           if-no-files-found: error
           retention-days: 14

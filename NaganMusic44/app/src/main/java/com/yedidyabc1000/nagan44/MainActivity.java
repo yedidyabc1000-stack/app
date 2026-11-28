@@ -220,13 +220,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private boolean showingNowPlaying = false;
     private int detailLevel = 0;
     private String detailTitle = "";
-    private ArrayList<Entry> parentEntries = null;
-    private String parentTitle = "";
     private int selectedPosition = 0;
-    private int parentScrollPosition = 0;
-    private int parentScrollTop = 0;
-    private int parentSelectedPosition = 0;
-    private boolean hasParentScrollSnapshot = false;
+    private final ArrayList<BrowserNavigationState> navigationStack =
+            new ArrayList<BrowserNavigationState>();
 
     private LinearLayout root;
     private LinearLayout toolbar;
@@ -277,7 +273,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private final Runnable scanChangedMedia = new Runnable() {
         @Override public void run() {
             if (isFinishing() || !hasStoragePermission()) return;
-            detailLevel = 0; parentEntries = null; parentTitle = "";
+            detailLevel = 0;
+            navigationStack.clear();
             loadLibraryAsync(false);
         }
     };
@@ -977,8 +974,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         removeHiddenSongs(loadedSongs);
         detailLevel = 0;
         detailTitle = "";
-        parentEntries = null;
-        parentTitle = "";
+        navigationStack.clear();
         visibleEntries.clear();
         HashMap<Long, Song> byId = new HashMap<Long, Song>();
         for (Song song : loadedSongs) byId.put(song.id, song);
@@ -1145,8 +1141,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private void openHomeCategory(int tab, String title) {
         activeTab = tab;
         detailLevel = 0;
-        parentEntries = null;
-        parentTitle = "";
+        navigationStack.clear();
         populateBrowser();
         detailLevel = 1;
         detailTitle = title;
@@ -1315,8 +1310,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private void switchToTab(final int tab) {
         if (detailLevel != 0) {
             detailLevel = 0;
-            parentEntries = null;
-            parentTitle = "";
+            navigationStack.clear();
         }
         activeTab = tab;
         if (tab != TAB_NOW_PLAYING) lastContentTab = tab;
@@ -1675,22 +1669,52 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     }
 
     private void showEntries(String title, ArrayList<Entry> entries) {
-        if (detailLevel == 1) {
-            parentEntries = new ArrayList<Entry>(visibleEntries);
-            parentTitle = detailTitle;
-            parentSelectedPosition = selectedPosition;
-            parentScrollPosition = listView == null ? selectedPosition
-                    : Math.max(0, listView.getFirstVisiblePosition());
-            View firstVisible = listView == null ? null : listView.getChildAt(0);
-            parentScrollTop = firstVisible == null ? 0 : firstVisible.getTop();
-            hasParentScrollSnapshot = listView != null;
-        }
+        if (detailLevel > 0) pushBrowserNavigationState();
         detailLevel++;
         detailTitle = title;
         visibleEntries.clear();
         visibleEntries.addAll(entries);
         selectedPosition = 0;
         renderBrowser();
+    }
+
+    private void pushBrowserNavigationState() {
+        BrowserNavigationState state = new BrowserNavigationState();
+        state.detailLevel = detailLevel;
+        state.title = detailTitle;
+        state.entries = new ArrayList<Entry>(visibleEntries);
+        state.selectedPosition = selectedPosition;
+        if (listView != null) {
+            state.firstVisiblePosition = Math.max(0, listView.getFirstVisiblePosition());
+            View firstVisible = listView.getChildAt(0);
+            state.firstVisibleTop = firstVisible == null ? 0 : firstVisible.getTop();
+            state.hasScrollPosition = true;
+        }
+        navigationStack.add(state);
+    }
+
+    private void restoreBrowserNavigationState(BrowserNavigationState state) {
+        if (state == null) return;
+        detailLevel = state.detailLevel;
+        detailTitle = state.title;
+        visibleEntries.clear();
+        if (state.entries != null) visibleEntries.addAll(state.entries);
+        selectedPosition = Math.max(0, state.selectedPosition);
+        renderBrowser();
+        final ListView restoredList = listView;
+        if (state.hasScrollPosition && restoredList != null) {
+            final int firstPosition = state.firstVisiblePosition;
+            final int firstTop = state.firstVisibleTop;
+            final int selected = selectedPosition;
+            restoredList.post(new Runnable() {
+                @Override public void run() {
+                    if (restoredList == listView) {
+                        restoredList.setSelectionFromTop(firstPosition, firstTop);
+                        selectedPosition = selected;
+                    }
+                }
+            });
+        }
     }
 
     private void showTrackList(String title, ArrayList<Song> songs) {
@@ -2023,7 +2047,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         Map<String, ArrayList<Song>> result = new LinkedHashMap<String, ArrayList<Song>>();
         for (Song song : sourceSongs) {
             String artistCredit = song.albumArtist == null || song.albumArtist.trim().length() == 0
-                    ? song.artist : song.albumArtist;
+                    || "<unknown>".equalsIgnoreCase(song.albumArtist.trim())
+                    ? "אמן לא ידוע" : song.albumArtist.trim();
             String[] names = splitArtists(artistCredit);
             for (String name : names) {
                 if (name.length() == 0) continue;
@@ -2066,21 +2091,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private String artistLabel(List<Song> songs) {
         if (songs == null || songs.size() == 0) return "";
         String albumArtist = songs.get(0).albumArtist;
-        if (albumArtist != null && albumArtist.trim().length() > 0) {
-            String[] albumCredits = splitArtists(albumArtist);
-            if (albumCredits.length > 0) return albumCredits[0];
-        }
-        ArrayList<String> common = new ArrayList<String>();
-        for (String name : splitArtists(songs.get(0).artist)) if (name.length() > 0 && !common.contains(name)) common.add(name);
-        for (int i = 1; i < songs.size() && common.size() > 0; i++) {
-            String[] credits = splitArtists(songs.get(i).artist);
-            for (int j = common.size() - 1; j >= 0; j--) {
-                boolean found = false;
-                for (String credit : credits) if (common.get(j).equalsIgnoreCase(credit)) { found = true; break; }
-                if (!found) common.remove(j);
-            }
-        }
-        return common.size() == 0 ? "אמן לא ידוע" : common.get(0);
+        if (albumArtist == null || albumArtist.trim().length() == 0
+                || "<unknown>".equalsIgnoreCase(albumArtist.trim())) return "אמן לא ידוע";
+        String[] albumCredits = splitArtists(albumArtist.trim());
+        return albumCredits.length == 0 ? "אמן לא ידוע" : albumCredits[0];
     }
 
     private ArrayList<Song> getArtistSongs(String name) {
@@ -2123,9 +2137,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         showingNowPlaying = true;
         shuffleButton = null;
         repeatButton = null;
+        Drawable previousBackground = nowPlayingRoot == null ? null : nowPlayingRoot.getBackground();
+        Drawable previousArtwork = nowArt == null ? null : nowArt.getDrawable();
         nowPlayingRoot = new LinearLayout(this);
         nowPlayingRoot.setOrientation(LinearLayout.VERTICAL);
-        nowPlayingRoot.setBackgroundColor(COLOR_BG);
+        if (previousBackground != null) nowPlayingRoot.setBackgroundDrawable(previousBackground);
+        else nowPlayingRoot.setBackgroundColor(COLOR_BG);
 
         // Fixed layout. Artwork leaves enough room for the timeline and controls.
         // after the song details, timeline and transport controls are placed.
@@ -2139,7 +2156,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
         nowArt.setScaleX(isPlaying() ? 1f : 0.94f);
         nowArt.setScaleY(isPlaying() ? 1f : 0.94f);
-        nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
+        // Reuse the previous cover while the next track artwork loads.
+        if (previousArtwork != null) nowArt.setImageDrawable(previousArtwork);
+        else nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
         artHolder.setBackgroundColor(COLOR_BG);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 1.02f);
@@ -2175,7 +2194,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         seekBar.setMinimumHeight(dp(36));
         if (Build.VERSION.SDK_INT >= 17) seekBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         seekBar.setThumb(createTimelineThumb());
-        seekBar.setThumbOffset(dp(9));
+        seekBar.setThumbOffset(dp(5));
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) { }
             @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; }
@@ -2569,13 +2588,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         // Very subtle graphic geometry, not a busy template.
         Paint decoration = new Paint(Paint.ANTI_ALIAS_FLAG);
-        decoration.setStyle(Paint.Style.STROKE);
-        decoration.setStrokeWidth(2f);
-        decoration.setColor(0x25ffffff);
-        canvas.drawCircle(size * 0.83f, size * 0.22f, size * 0.20f, decoration);
-        decoration.setStrokeWidth(1.2f);
-        decoration.setColor(0x17ffffff);
-        canvas.drawCircle(size * 0.83f, size * 0.22f, size * 0.29f, decoration);
         decoration.setStyle(Paint.Style.FILL);
         decoration.setColor(0x14ffffff);
         Path angledShape = new Path();
@@ -2593,28 +2605,31 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 new float[]{0f, 0.16f, 0.84f, 1f}, Shader.TileMode.CLAMP));
         canvas.drawRoundRect(new RectF(34f, 210f, size - 34f, 552f), 30f, 30f, textPanel);
 
-        TextPaint titlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(0xfffbfbff);
-        titlePaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        titlePaint.setTextSize(title.length() > 48 ? 47f : (title.length() > 28 ? 56f : 68f));
-        titlePaint.setShadowLayer(15f, 0f, 4f, 0xaa000000);
+        float[] titleHsv = new float[]{hueA, 0.42f, 1f};
+        int titleColor = android.graphics.Color.HSVToColor(titleHsv);
+        float[] artistHsv = new float[]{hueB, 0.52f, 1f};
+        int artistColor = android.graphics.Color.HSVToColor(artistHsv);
 
-        float[] accentHsv = new float[]{hueB, 0.24f, 1f};
-        int artistColor = android.graphics.Color.HSVToColor(accentHsv);
+        TextPaint titlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        titlePaint.setColor(titleColor);
+        titlePaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        titlePaint.setTextSize(title.length() > 48 ? 61f : (title.length() > 28 ? 74f : 88f));
+        titlePaint.setShadowLayer(17f, 0f, 5f, 0xb0000000);
+
         TextPaint artistPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         artistPaint.setColor(artistColor);
         artistPaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        artistPaint.setTextSize(34f);
-        artistPaint.setShadowLayer(10f, 0f, 3f, 0x99000000);
+        artistPaint.setTextSize(46f);
+        artistPaint.setShadowLayer(11f, 0f, 3f, 0xa0000000);
 
-        int textWidth = size - 142;
+        int textWidth = size - 112;
         StaticLayout titleLayout = new StaticLayout(title, titlePaint, textWidth,
                 Layout.Alignment.ALIGN_CENTER, 1.08f, 0f, true);
         StaticLayout artistLayout = new StaticLayout(artist, artistPaint, textWidth,
                 Layout.Alignment.ALIGN_CENTER, 1.10f, 0f, true);
-        int gap = 26;
+        int gap = 28;
         int totalHeight = titleLayout.getHeight() + gap + artistLayout.getHeight();
-        float y = Math.max(224f, (size - totalHeight) / 2f);
+        float y = Math.max(188f, (size - totalHeight) / 2f);
 
         canvas.save();
         canvas.translate(71f, y);
@@ -2622,28 +2637,6 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         canvas.translate(0f, titleLayout.getHeight() + gap);
         artistLayout.draw(canvas);
         canvas.restore();
-
-        // A restrained accent line and a unique, softly glowing waveform.
-        Paint accentLine = new Paint(Paint.ANTI_ALIAS_FLAG);
-        accentLine.setColor(0x77ffffff);
-        accentLine.setStrokeWidth(2f);
-        canvas.drawLine(size * 0.34f, 572f, size * 0.66f, 572f, accentLine);
-
-        Paint waveform = new Paint(Paint.ANTI_ALIAS_FLAG);
-        float centerY = 635f;
-        float barGap = 6f;
-        float barWidth = 4f;
-        float totalWaveWidth = 48f * barWidth + 47f * barGap;
-        float startX = (size - totalWaveWidth) / 2f;
-        int waveSeed = title.hashCode() * 31 + artist.hashCode();
-        for (int i = 0; i < 48; i++) {
-            int value = Math.abs((waveSeed + i * 73 + i * i * 19) % 100);
-            float height = 8f + (value / 100f) * 40f;
-            float x = startX + i * (barWidth + barGap);
-            waveform.setColor((i % 4 == 0 ? 0x55ffffff : 0x88ffffff));
-            canvas.drawRoundRect(new RectF(x, centerY - height / 2f,
-                    x + barWidth, centerY + height / 2f), 2f, 2f, waveform);
-        }
 
         Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
         border.setColor(0x35ffffff);
@@ -3867,43 +3860,15 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (showingNowPlaying) {
             showingNowPlaying = false; activeTab = lastContentTab; renderBrowser(); return;
         }
-        if (detailLevel > 1 && parentEntries != null) {
-            detailLevel = 1;
-            detailTitle = parentTitle;
-            visibleEntries.clear();
-            visibleEntries.addAll(parentEntries);
-            parentEntries = null;
-            parentTitle = "";
-            selectedPosition = Math.max(0, parentSelectedPosition);
-
-            final boolean restoreScroll = hasParentScrollSnapshot;
-            final int restorePosition = parentScrollPosition;
-            final int restoreTop = parentScrollTop;
-            final int restoreSelection = selectedPosition;
-            hasParentScrollSnapshot = false;
-            parentScrollPosition = 0;
-            parentScrollTop = 0;
-            parentSelectedPosition = 0;
-
-            renderBrowser();
-            final ListView restoreList = listView;
-            if (restoreScroll && restoreList != null) {
-                restoreList.post(new Runnable() {
-                    @Override public void run() {
-                        if (restoreList == listView) {
-                            restoreList.setSelectionFromTop(restorePosition, restoreTop);
-                            selectedPosition = restoreSelection;
-                        }
-                    }
-                });
-            }
+        if (detailLevel > 0 && navigationStack.size() > 0) {
+            BrowserNavigationState previous = navigationStack.remove(navigationStack.size() - 1);
+            restoreBrowserNavigationState(previous);
             return;
         }
         if (detailLevel > 0) {
             detailLevel = 0;
             detailTitle = "";
-            parentEntries = null;
-            parentTitle = "";
+            navigationStack.clear();
             selectedPosition = 0;
             renderBrowser();
             return;
@@ -4094,7 +4059,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         GradientDrawable thumb = new GradientDrawable();
         thumb.setShape(GradientDrawable.OVAL);
         thumb.setColor(0xffffffff);
-        thumb.setSize(dp(18), dp(18));
+        thumb.setSize(dp(10), dp(10));
         return thumb;
     }
 
@@ -4360,6 +4325,16 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         static Entry artistAlbum(String title, String artist, ArrayList<Song> songs) { return new Entry(TYPE_ARTIST_ALBUM, title, artist, null, songs, 0); }
         static Entry playlist(String title, String subtitle, int id) { return new Entry(TYPE_PLAYLIST, title, subtitle, null, null, id); }
         static Entry action(String title, String subtitle, int actionId) { return new Entry(TYPE_ACTION, title, subtitle, actionId); }
+    }
+
+    private static class BrowserNavigationState {
+        int detailLevel;
+        String title;
+        ArrayList<Entry> entries;
+        int selectedPosition;
+        int firstVisiblePosition;
+        int firstVisibleTop;
+        boolean hasScrollPosition;
     }
 
 }
