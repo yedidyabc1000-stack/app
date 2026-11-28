@@ -223,6 +223,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private ArrayList<Entry> parentEntries = null;
     private String parentTitle = "";
     private int selectedPosition = 0;
+    private int parentScrollPosition = 0;
+    private int parentScrollTop = 0;
+    private int parentSelectedPosition = 0;
+    private boolean hasParentScrollSnapshot = false;
 
     private LinearLayout root;
     private LinearLayout toolbar;
@@ -1170,7 +1174,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void onClick(View v) { onBackPressed(); }
         });
         toolbar.addView(toolbarBack, new LinearLayout.LayoutParams(dp(36), -1));
-        toolbarTitle = text(detailTitle, 18, 0xffffffff, true);
+        toolbarTitle = text(activeTab == TAB_ARTISTS && detailLevel == 2 ? "" : detailTitle, 18, 0xffffffff, true);
         toolbarTitle.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, -1, 1);
         toolbar.addView(toolbarTitle, titleParams);
@@ -1202,6 +1206,17 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         adapter = new BrowserAdapter(new ArrayList<Entry>(visibleEntries));
         LinearLayout browserContent = new LinearLayout(this);
         browserContent.setOrientation(LinearLayout.VERTICAL);
+        if (activeTab == TAB_ARTISTS && detailLevel == 2) {
+            TextView artistHeading = text(detailTitle, 27, COLOR_TEXT, true);
+            artistHeading.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+            artistHeading.setPadding(dp(18), 0, dp(18), 0);
+            artistHeading.setSingleLine(true);
+            artistHeading.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams artistHeadingParams =
+                    new LinearLayout.LayoutParams(-1, dp(62));
+            artistHeadingParams.setMargins(dp(4), dp(4), dp(4), dp(2));
+            browserContent.addView(artistHeading, artistHeadingParams);
+        }
         if (detailLevel == 1 && activeTab == TAB_SONGS) {
             final EditText search = new EditText(this);
             search.setSingleLine(true);
@@ -1271,7 +1286,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         });
 
         miniPlayer = createMiniPlayer();
-        if (currentSong != null) root.addView(miniPlayer, new LinearLayout.LayoutParams(-1, dp(44)));
+        if (currentSong != null) root.addView(miniPlayer, new LinearLayout.LayoutParams(-1, dp(57)));
         setContentView(root);
         updateTabs();
         listView.requestFocus();
@@ -1663,6 +1678,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         if (detailLevel == 1) {
             parentEntries = new ArrayList<Entry>(visibleEntries);
             parentTitle = detailTitle;
+            parentSelectedPosition = selectedPosition;
+            parentScrollPosition = listView == null ? selectedPosition
+                    : Math.max(0, listView.getFirstVisiblePosition());
+            View firstVisible = listView == null ? null : listView.getChildAt(0);
+            parentScrollTop = firstVisible == null ? 0 : firstVisible.getTop();
+            hasParentScrollSnapshot = listView != null;
         }
         detailLevel++;
         detailTitle = title;
@@ -2149,11 +2170,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         seekBar.setProgressDrawable(new TimelineProgressDrawable());
         seekBar.setMax(currentSong == null ? 1 : (int)Math.max(1, currentSong.duration));
         seekBar.setProgress(player != null ? safePosition() : 0);
-        seekBar.setPadding(dp(4), dp(7), dp(4), dp(7));
+        // Extra horizontal room keeps the round thumb fully visible at 0:00 and at the end.
+        seekBar.setPadding(dp(13), dp(7), dp(13), dp(7));
         seekBar.setMinimumHeight(dp(36));
         if (Build.VERSION.SDK_INT >= 17) seekBar.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
         seekBar.setThumb(createTimelineThumb());
-        seekBar.setThumbOffset(dp(8));
+        seekBar.setThumbOffset(dp(9));
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) { }
             @Override public void onStartTrackingTouch(SeekBar bar) { userSeeking = true; }
@@ -2184,7 +2206,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() { playPrevious(); }
         });
         LinearLayout.LayoutParams sideParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-        sideParams.rightMargin = dp(22);
+        sideParams.rightMargin = dp(34);
         controls.addView(previous, sideParams);
 
         nowPlayButton = new TransportButton(this, TransportButton.TYPE_PLAY);
@@ -2194,7 +2216,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        controls.addView(nowPlayButton, new LinearLayout.LayoutParams(dp(38), dp(38)));
 
         TransportButton next = new TransportButton(this, TransportButton.TYPE_NEXT);
         next.setContentDescription("השיר הבא; לחיצה ארוכה: הרצה קדימה");
@@ -2203,7 +2225,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             @Override public void run() { playNext(true); }
         });
         LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-        nextParams.leftMargin = dp(22);
+        nextParams.leftMargin = dp(34);
         controls.addView(next, nextParams);
         content.addView(controls, new LinearLayout.LayoutParams(-1, dp(54)));
 
@@ -2502,168 +2524,129 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
     private Bitmap createGeneratedArtwork(Song song) {
         final int size = 720;
-        int[][] palettes = new int[][]{
-                {0xff10172e, 0xff6843a5, 0xff182b54, 0xff070b18},
-                {0xff09272e, 0xff168b91, 0xff123d54, 0xff06151d},
-                {0xff281321, 0xffa13d67, 0xff44204f, 0xff100914},
-                {0xff241b13, 0xffbd8545, 0xff60402c, 0xff100d0a},
-                {0xff10251c, 0xff4c996c, 0xff254f52, 0xff07120e},
-                {0xff121c32, 0xff4d82a9, 0xff303b72, 0xff080d19},
-                {0xff24142f, 0xff9b61a8, 0xff3d397a, 0xff0c0919},
-                {0xff292018, 0xffb45d42, 0xff55304a, 0xff110b12}
-        };
         String title = displaySongTitle(song.title);
         String artist = clean(song.artist, "אמן לא ידוע");
         if (title.length() > 78) title = title.substring(0, 75) + "…";
-        if (artist.length() > 52) artist = artist.substring(0, 49) + "…";
-        int paletteIndex = ((title + "|" + artist).hashCode() & 0x7fffffff) % palettes.length;
-        int[] palette = palettes[paletteIndex];
+        if (artist.length() > 60) artist = artist.substring(0, 57) + "…";
+
+        // A seeded random pair gives every song its own vivid, but not fluorescent, palette.
+        // The seed keeps a track's cover consistent between app launches.
+        long seed = (song.id * 0x9E3779B97F4A7C15L)
+                ^ ((long) title.hashCode() << 32) ^ artist.hashCode();
+        Random colorRandom = new Random(seed);
+        float hueA = colorRandom.nextInt(360);
+        float hueB = (hueA + 62f + colorRandom.nextInt(112)) % 360f;
+        float[] hsvA = new float[]{hueA, 0.66f + colorRandom.nextFloat() * 0.16f,
+                0.68f + colorRandom.nextFloat() * 0.14f};
+        float[] hsvB = new float[]{hueB, 0.64f + colorRandom.nextFloat() * 0.17f,
+                0.68f + colorRandom.nextFloat() * 0.14f};
+        int colorA = android.graphics.Color.HSVToColor(hsvA);
+        int colorB = android.graphics.Color.HSVToColor(hsvB);
+        hsvA[2] *= 0.43f;
+        hsvB[2] *= 0.43f;
+        int darkA = android.graphics.Color.HSVToColor(hsvA);
+        int darkB = android.graphics.Color.HSVToColor(hsvB);
 
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
 
         Paint background = new Paint(Paint.ANTI_ALIAS_FLAG);
-        background.setShader(new LinearGradient(0, 0, size, size,
-                new int[]{palette[0], palette[1], palette[2], palette[3]},
-                new float[]{0f, 0.38f, 0.72f, 1f}, Shader.TileMode.CLAMP));
+        background.setShader(new LinearGradient(0f, 0f, size, size,
+                new int[]{darkA, colorA, colorB, darkB},
+                new float[]{0f, 0.36f, 0.70f, 1f}, Shader.TileMode.CLAMP));
         canvas.drawRect(0, 0, size, size, background);
 
-        // Soft pools of coloured light add depth without making the title hard to read.
-        Paint light = new Paint(Paint.ANTI_ALIAS_FLAG);
-        light.setShader(new RadialGradient(size * 0.78f, size * 0.20f, size * 0.72f,
-                new int[]{0x66000000 | (palette[1] & 0x00ffffff), 0x00000000},
+        // Two soft light pools enrich the blend while keeping the composition restrained.
+        Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+        glow.setShader(new RadialGradient(size * 0.20f, size * 0.18f, size * 0.74f,
+                new int[]{0x39000000 | (colorA & 0x00ffffff), 0x00000000},
                 new float[]{0f, 1f}, Shader.TileMode.CLAMP));
-        canvas.drawCircle(size * 0.78f, size * 0.20f, size * 0.72f, light);
-        light.setShader(new RadialGradient(size * 0.12f, size * 0.82f, size * 0.56f,
-                new int[]{0x44000000 | (palette[2] & 0x00ffffff), 0x00000000},
-                null, Shader.TileMode.CLAMP));
-        canvas.drawCircle(size * 0.12f, size * 0.82f, size * 0.56f, light);
+        canvas.drawCircle(size * 0.20f, size * 0.18f, size * 0.74f, glow);
+        glow.setShader(new RadialGradient(size * 0.86f, size * 0.84f, size * 0.64f,
+                new int[]{0x30000000 | (colorB & 0x00ffffff), 0x00000000},
+                new float[]{0f, 1f}, Shader.TileMode.CLAMP));
+        canvas.drawCircle(size * 0.86f, size * 0.84f, size * 0.64f, glow);
 
-        // Broad translucent light beams and geometric layers.
-        Paint shapes = new Paint(Paint.ANTI_ALIAS_FLAG);
-        shapes.setStyle(Paint.Style.FILL);
-        shapes.setColor(0x12ffffff);
-        Path beam = new Path();
-        beam.moveTo(0, size * 0.17f);
-        beam.lineTo(size * 0.37f, 0);
-        beam.lineTo(size * 0.53f, 0);
-        beam.lineTo(0, size * 0.43f);
-        beam.close();
-        canvas.drawPath(beam, shapes);
-        Path lowerShape = new Path();
-        lowerShape.moveTo(size, size * 0.48f);
-        lowerShape.lineTo(size, size);
-        lowerShape.lineTo(size * 0.42f, size);
-        lowerShape.close();
-        canvas.drawPath(lowerShape, shapes);
+        // Very subtle graphic geometry, not a busy template.
+        Paint decoration = new Paint(Paint.ANTI_ALIAS_FLAG);
+        decoration.setStyle(Paint.Style.STROKE);
+        decoration.setStrokeWidth(2f);
+        decoration.setColor(0x25ffffff);
+        canvas.drawCircle(size * 0.83f, size * 0.22f, size * 0.20f, decoration);
+        decoration.setStrokeWidth(1.2f);
+        decoration.setColor(0x17ffffff);
+        canvas.drawCircle(size * 0.83f, size * 0.22f, size * 0.29f, decoration);
+        decoration.setStyle(Paint.Style.FILL);
+        decoration.setColor(0x14ffffff);
+        Path angledShape = new Path();
+        angledShape.moveTo(0f, size * 0.12f);
+        angledShape.lineTo(size * 0.25f, 0f);
+        angledShape.lineTo(size * 0.40f, 0f);
+        angledShape.lineTo(0f, size * 0.33f);
+        angledShape.close();
+        canvas.drawPath(angledShape, decoration);
 
-        Paint rings = new Paint(Paint.ANTI_ALIAS_FLAG);
-        rings.setStyle(Paint.Style.STROKE);
-        rings.setStrokeWidth(2.2f);
-        rings.setColor(0x35ffffff);
-        canvas.drawCircle(size * 0.83f, size * 0.19f, size * 0.18f, rings);
-        rings.setStrokeWidth(1.5f);
-        rings.setColor(0x20ffffff);
-        canvas.drawCircle(size * 0.83f, size * 0.19f, size * 0.27f, rings);
-        canvas.drawCircle(size * 0.83f, size * 0.19f, size * 0.36f, rings);
-        rings.setColor(0x1cffffff);
-        canvas.drawCircle(size * 0.12f, size * 0.78f, size * 0.22f, rings);
-        canvas.drawCircle(size * 0.12f, size * 0.78f, size * 0.31f, rings);
-
-        // Fine framing lines and subtle particles create a polished video-cover finish.
-        Paint detail = new Paint(Paint.ANTI_ALIAS_FLAG);
-        detail.setColor(0x18ffffff);
-        detail.setStrokeWidth(1f);
-        for (int i = 0; i < 8; i++) {
-            float x = 54f + i * 88f;
-            canvas.drawLine(x, 34f, x, size - 34f, detail);
-        }
-        for (int i = 0; i < 6; i++) {
-            float y = 54f + i * 112f;
-            canvas.drawLine(34f, y, size - 34f, y, detail);
-        }
-        for (int i = 0; i < 22; i++) {
-            float x = (float) ((i * 137 + paletteIndex * 47) % 650) + 35f;
-            float y = (float) ((i * 83 + paletteIndex * 71) % 650) + 35f;
-            detail.setColor(i % 3 == 0 ? 0x55ffffff : 0x27ffffff);
-            canvas.drawCircle(x, y, i % 4 == 0 ? 2.8f : 1.5f, detail);
-        }
-
-        // Oversized, very faint initial gives every generated cover a unique graphic mark.
-        String initial = title.length() == 0 ? "♫" : title.substring(0, 1);
-        Paint monogram = new Paint(Paint.ANTI_ALIAS_FLAG);
-        monogram.setColor(0x16ffffff);
-        monogram.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        monogram.setTextSize(390f);
-        monogram.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText(initial, size * 0.51f, size * 0.61f, monogram);
-
-        // Small editorial label at the top.
-        Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        pill.setColor(0x2affffff);
-        pill.setStyle(Paint.Style.FILL);
-        canvas.drawRoundRect(new RectF(238f, 55f, 482f, 105f), 24f, 24f, pill);
-        TextPaint labelPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        labelPaint.setColor(0xfff4f1f8);
-        labelPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        labelPaint.setTextSize(19f);
-        labelPaint.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText("LYRICS  •  VISUAL", size / 2f, 87f, labelPaint);
-
-        // A dark translucent text field keeps both Hebrew and Latin titles legible.
+        // A soft dark panel improves readability on both colours.
         Paint textPanel = new Paint(Paint.ANTI_ALIAS_FLAG);
-        textPanel.setShader(new LinearGradient(0, 210f, 0, 555f,
-                new int[]{0x00040a14, 0x55040a14, 0x55040a14, 0x00040a14},
-                new float[]{0f, 0.20f, 0.82f, 1f}, Shader.TileMode.CLAMP));
-        canvas.drawRoundRect(new RectF(30f, 205f, size - 30f, 555f), 28f, 28f, textPanel);
+        textPanel.setShader(new LinearGradient(0f, 220f, 0f, 545f,
+                new int[]{0x00030a13, 0x50030a13, 0x50030a13, 0x00030a13},
+                new float[]{0f, 0.16f, 0.84f, 1f}, Shader.TileMode.CLAMP));
+        canvas.drawRoundRect(new RectF(34f, 210f, size - 34f, 552f), 30f, 30f, textPanel);
 
-        int textWidth = size - 150;
         TextPaint titlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(0xfffbfaff);
+        titlePaint.setColor(0xfffbfbff);
         titlePaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        titlePaint.setTextSize(title.length() > 48 ? 46f : (title.length() > 28 ? 55f : 66f));
-        titlePaint.setShadowLayer(16f, 0f, 5f, 0xaa000000);
-        TextPaint artistPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        artistPaint.setColor(0xffe4e1eb);
-        artistPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        artistPaint.setTextSize(32f);
-        artistPaint.setShadowLayer(10f, 0f, 3f, 0x88000000);
+        titlePaint.setTextSize(title.length() > 48 ? 47f : (title.length() > 28 ? 56f : 68f));
+        titlePaint.setShadowLayer(15f, 0f, 4f, 0xaa000000);
 
+        float[] accentHsv = new float[]{hueB, 0.24f, 1f};
+        int artistColor = android.graphics.Color.HSVToColor(accentHsv);
+        TextPaint artistPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        artistPaint.setColor(artistColor);
+        artistPaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        artistPaint.setTextSize(34f);
+        artistPaint.setShadowLayer(10f, 0f, 3f, 0x99000000);
+
+        int textWidth = size - 142;
         StaticLayout titleLayout = new StaticLayout(title, titlePaint, textWidth,
                 Layout.Alignment.ALIGN_CENTER, 1.08f, 0f, true);
         StaticLayout artistLayout = new StaticLayout(artist, artistPaint, textWidth,
                 Layout.Alignment.ALIGN_CENTER, 1.10f, 0f, true);
-        int gap = 24;
+        int gap = 26;
         int totalHeight = titleLayout.getHeight() + gap + artistLayout.getHeight();
-        float y = Math.max(222f, (size - totalHeight) / 2f + 16f);
+        float y = Math.max(224f, (size - totalHeight) / 2f);
 
         canvas.save();
-        canvas.translate(75f, y);
+        canvas.translate(71f, y);
         titleLayout.draw(canvas);
         canvas.translate(0f, titleLayout.getHeight() + gap);
         artistLayout.draw(canvas);
         canvas.restore();
 
-        // Restrained audio waveform along the lower edge.
+        // A restrained accent line and a unique, softly glowing waveform.
+        Paint accentLine = new Paint(Paint.ANTI_ALIAS_FLAG);
+        accentLine.setColor(0x77ffffff);
+        accentLine.setStrokeWidth(2f);
+        canvas.drawLine(size * 0.34f, 572f, size * 0.66f, 572f, accentLine);
+
         Paint waveform = new Paint(Paint.ANTI_ALIAS_FLAG);
-        waveform.setStyle(Paint.Style.FILL);
-        float centerY = 631f;
-        float barGap = 5f;
+        float centerY = 635f;
+        float barGap = 6f;
         float barWidth = 4f;
-        float totalWaveWidth = 54f * barWidth + 53f * barGap;
+        float totalWaveWidth = 48f * barWidth + 47f * barGap;
         float startX = (size - totalWaveWidth) / 2f;
-        int seed = (title + artist).hashCode();
-        for (int i = 0; i < 54; i++) {
-            int value = Math.abs((seed + i * 97 + i * i * 13) % 100);
-            float height = 9f + (value / 100f) * 43f;
+        int waveSeed = title.hashCode() * 31 + artist.hashCode();
+        for (int i = 0; i < 48; i++) {
+            int value = Math.abs((waveSeed + i * 73 + i * i * 19) % 100);
+            float height = 8f + (value / 100f) * 40f;
             float x = startX + i * (barWidth + barGap);
-            float alphaFactor = i < 5 || i > 48 ? 0.45f : 1f;
-            waveform.setColor(((int) (0x88 * alphaFactor) << 24) | (palette[1] & 0x00ffffff));
+            waveform.setColor((i % 4 == 0 ? 0x55ffffff : 0x88ffffff));
             canvas.drawRoundRect(new RectF(x, centerY - height / 2f,
                     x + barWidth, centerY + height / 2f), 2f, 2f, waveform);
         }
+
         Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
-        border.setColor(0x42ffffff);
+        border.setColor(0x35ffffff);
         border.setStyle(Paint.Style.STROKE);
         border.setStrokeWidth(2f);
         canvas.drawRoundRect(new RectF(18f, 18f, size - 18f, size - 18f), 25f, 25f, border);
@@ -3566,9 +3549,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         play.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { togglePlayback(); }
         });
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(50), dp(50));
-        playParams.leftMargin = dp(18);
-        playParams.rightMargin = dp(18);
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+        playParams.leftMargin = dp(30);
+        playParams.rightMargin = dp(30);
         controls.addView(play, playParams);
 
         TransportButton next = new TransportButton(this, TransportButton.TYPE_NEXT);
@@ -3891,8 +3874,29 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             visibleEntries.addAll(parentEntries);
             parentEntries = null;
             parentTitle = "";
-            selectedPosition = 0;
+            selectedPosition = Math.max(0, parentSelectedPosition);
+
+            final boolean restoreScroll = hasParentScrollSnapshot;
+            final int restorePosition = parentScrollPosition;
+            final int restoreTop = parentScrollTop;
+            final int restoreSelection = selectedPosition;
+            hasParentScrollSnapshot = false;
+            parentScrollPosition = 0;
+            parentScrollTop = 0;
+            parentSelectedPosition = 0;
+
             renderBrowser();
+            final ListView restoreList = listView;
+            if (restoreScroll && restoreList != null) {
+                restoreList.post(new Runnable() {
+                    @Override public void run() {
+                        if (restoreList == listView) {
+                            restoreList.setSelectionFromTop(restorePosition, restoreTop);
+                            selectedPosition = restoreSelection;
+                        }
+                    }
+                });
+            }
             return;
         }
         if (detailLevel > 0) {
@@ -4048,15 +4052,15 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             float centerY = bounds.exactCenterY();
             float halfHeight = Math.max(dp(2), dp(5) / 2f);
             track.set(left, centerY - halfHeight, right, centerY + halfHeight);
-            paint.setColor(0xffd4dfe3);
             paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xff252525);
             canvas.drawRoundRect(track, halfHeight, halfHeight, paint);
 
             float fraction = Math.max(0f, Math.min(1f, getLevel() / 10000f));
             float progressRight = left + (right - left) * fraction;
             if (progressRight > left) {
                 fill.set(left, centerY - halfHeight, progressRight, centerY + halfHeight);
-                paint.setColor(0xff00aabd);
+                paint.setColor(0xffffffff);
                 canvas.drawRoundRect(fill, halfHeight, halfHeight, paint);
             }
         }
@@ -4090,8 +4094,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         GradientDrawable thumb = new GradientDrawable();
         thumb.setShape(GradientDrawable.OVAL);
         thumb.setColor(0xffffffff);
-        thumb.setStroke(dp(2), 0xff008f9f);
-        thumb.setSize(dp(16), dp(16));
+        thumb.setSize(dp(18), dp(18));
         return thumb;
     }
 
