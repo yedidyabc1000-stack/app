@@ -118,22 +118,23 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private static final long CROSSFADE_MAX_MS = 4000L;
     private static final int REQUEST_IMPORT_PLAYLIST = 411;
     private static final int CUSTOM_PLAYLIST_BASE = 1000;
-    private static final int COLOR_DARK = 0xff252525;
-    private static final int COLOR_BAR = 0xff383838;
-    private static final int COLOR_ACCENT = 0xff00b9cc;
-    private static final int COLOR_BG = 0xffcfd3d7;
-    private static final int COLOR_ROW = 0xffe1e4e7;
-    private static final int COLOR_TEXT = 0xff202020;
-    private static final int COLOR_SUB = 0xff777777;
+    private int COLOR_DARK = 0xff252525;
+    private int COLOR_BAR = 0xff383838;
+    private int COLOR_ACCENT = 0xff00b9cc;
+    private int COLOR_BG = 0xffcfd3d7;
+    private int COLOR_ROW = 0xffe1e4e7;
+    private int COLOR_TEXT = 0xff202020;
+    private int COLOR_SUB = 0xff777777;
     private static final String PREFS = "nagan_player_stats";
+    private static final String NIGHT_MODE_KEY = "night_mode_enabled";
     private static final String LIBRARY_CACHE_KEY = "library_cache_v3";
     private static final int MOOD_TAG_READER_VERSION = 2;
     private static final int MAX_ARTWORK_SIZE = 2400;
     private static final String TAG = "NaganMusic44";
     static final String ACTION_APP_MEDIA_BUTTON = "com.yedidyabc1000.nagan44.ACTION_MEDIA_BUTTON";
     static final String EXTRA_MEDIA_KEY_CODE = "media_key_code";
-    private static final int COLOR_FOCUS = 0xffb7d2d6;
-    private static final int COLOR_FOCUS_PRESSED = 0xff9dbfc4;
+    private int COLOR_FOCUS = 0xffb7d2d6;
+    private int COLOR_FOCUS_PRESSED = 0xff9dbfc4;
 
     private final ArrayList<Song> allSongs = new ArrayList<Song>();
     private final ArrayList<Song> queue = new ArrayList<Song>();
@@ -221,6 +222,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
     private int detailLevel = 0;
     private String detailTitle = "";
     private int selectedPosition = 0;
+    private boolean nightMode = false;
     private final ArrayList<BrowserNavigationState> navigationStack =
             new ArrayList<BrowserNavigationState>();
 
@@ -336,21 +338,44 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
+        nightMode = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(NIGHT_MODE_KEY, false);
+        applyThemePalette();
         registerMediaControls();
         handler.post(progressRunnable);
         loadUserPlaylists();
         if (hasStoragePermission()) {
-            ArrayList<Song> cachedSongs = readLibraryCache();
-            if (cachedSongs.size() > 0) {
-                reconcileLibrary(cachedSongs);
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                        .putString(LIBRARY_CACHE_KEY, serializeLibraryCache(allSongs)).apply();
-                renderBrowser();
-                prepareBrowserEntriesCacheAsync(new ArrayList<Song>(cachedSongs));
-                scanMissingMoodTagsAsync();
-            } else {
-                loadLibraryAsync();
-            }
+            // Render the home shell immediately; cached library parsing happens off the UI thread.
+            loading = true;
+            renderBrowser();
+            final int startupToken = ++libraryLoadToken;
+            Thread cacheWorker = new Thread(new Runnable() {
+                @Override public void run() {
+                    final ArrayList<Song> cachedSongs = readLibraryCache();
+                    final HashMap<Integer, ArrayList<Entry>> preparedEntries =
+                            cachedSongs.size() == 0 ? new HashMap<Integer, ArrayList<Entry>>()
+                                    : prepareBaseBrowserEntries(cachedSongs);
+                    final HashMap<Integer, ArrayList<Song>> preparedMoodIndex =
+                            cachedSongs.size() == 0 ? new HashMap<Integer, ArrayList<Song>>()
+                                    : buildMoodMixIndex(cachedSongs);
+                    handler.post(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing() || startupToken != libraryLoadToken) return;
+                            if (cachedSongs.size() > 0) {
+                                reconcileLibrary(cachedSongs, preparedMoodIndex);
+                                browserEntriesCache.putAll(preparedEntries);
+                                loading = false;
+                                renderBrowser();
+                                scanMissingMoodTagsAsync();
+                            } else {
+                                // Keep the home screen visible while the first full scan runs.
+                                loadLibraryAsync(false);
+                            }
+                        }
+                    });
+                }
+            }, "nagan-cache-startup");
+            cacheWorker.setPriority(Thread.NORM_PRIORITY);
+            cacheWorker.start();
         } else {
             renderPermissionScreen();
         }
@@ -638,10 +663,11 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                 removeHiddenSongs(loadedSongs);
                 final String cacheJson = serializeLibraryCache(loadedSongs);
                 final HashMap<Integer, ArrayList<Entry>> preparedEntries = prepareBaseBrowserEntries(loadedSongs);
+                final HashMap<Integer, ArrayList<Song>> preparedMoodIndex = buildMoodMixIndex(loadedSongs);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (isFinishing() || token != libraryLoadToken) return;
-                        reconcileLibrary(loadedSongs);
+                        reconcileLibrary(loadedSongs, preparedMoodIndex);
                         browserEntriesCache.putAll(preparedEntries);
                         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                                 .putString(LIBRARY_CACHE_KEY, cacheJson).apply();
@@ -968,10 +994,10 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         }
     }
 
-    private void reconcileLibrary(ArrayList<Song> loadedSongs) {
-        // Re-apply the strict rule at the last shared point before any browser,
-        // artist, album, mix or playlist list can be built from this snapshot.
-        removeHiddenSongs(loadedSongs);
+    private void reconcileLibrary(ArrayList<Song> loadedSongs,
+                                   HashMap<Integer, ArrayList<Song>> preparedMoodIndex) {
+        // MediaStore scans and cache reads validate hidden paths on worker threads.
+        // Avoid repeating canonical filesystem checks on the UI thread.
         detailLevel = 0;
         detailTitle = "";
         navigationStack.clear();
@@ -982,7 +1008,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         moodTagScanToken++;
         moodTagScanRunning = false;
         allSongs.clear(); allSongs.addAll(loadedSongs);
-        moodMixIndex = buildMoodMixIndex(allSongs);
+        moodMixIndex = preparedMoodIndex == null
+                ? buildMoodMixIndex(allSongs) : preparedMoodIndex;
         libraryRevision++;
         tabLoadToken++;
         browserEntriesCache.clear();
@@ -1025,8 +1052,8 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         StateListDrawable selector = new StateListDrawable();
         selector.addState(new int[]{android.R.attr.state_pressed}, new ColorDrawable(COLOR_FOCUS_PRESSED));
         selector.addState(new int[]{android.R.attr.state_focused}, new ColorDrawable(COLOR_FOCUS));
-        selector.addState(new int[]{android.R.attr.state_selected}, new ColorDrawable(0xfff8f8f8));
-        selector.addState(new int[]{}, new ColorDrawable(0xffdddddd));
+        selector.addState(new int[]{android.R.attr.state_selected}, new ColorDrawable(COLOR_ROW));
+        selector.addState(new int[]{}, new ColorDrawable(COLOR_BG));
         return selector;
     }
 
@@ -1062,19 +1089,70 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
                         renderNowPlaying();
                     }
                 });
-        addHomeRow(page, "שירים", "", allSongs.size() + " שירים", "≡", compact, compactRowHeight,
-                new Runnable() { @Override public void run() { openHomeCategory(TAB_SONGS, "שירים"); } });
-        addHomeRow(page, "אמנים", "", artistIndex().size() + " אמנים", "♬", compact, compactRowHeight,
-                new Runnable() { @Override public void run() { openHomeCategory(TAB_ARTISTS, "אמנים"); } });
-        addHomeRow(page, "אלבומים", "", albumGroups(allSongs).size() + " אלבומים", "▤", compact, compactRowHeight,
-                new Runnable() { @Override public void run() { openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
+        addHomeRow(page, "שירים", "", loading ? "טוען ספרייה..." : allSongs.size() + " שירים", "≡", compact, compactRowHeight,
+                new Runnable() { @Override public void run() { if (!loading) openHomeCategory(TAB_SONGS, "שירים"); } });
+        ArrayList<Entry> cachedArtists = browserEntriesCache.get(TAB_ARTISTS);
+        ArrayList<Entry> cachedAlbums = browserEntriesCache.get(TAB_ALBUMS);
+        addHomeRow(page, "אמנים", "", loading && cachedArtists == null ? "טוען..." :
+                (cachedArtists == null ? 0 : cachedArtists.size()) + " אמנים", "♬", compact, compactRowHeight,
+                new Runnable() { @Override public void run() { if (!loading) openHomeCategory(TAB_ARTISTS, "אמנים"); } });
+        addHomeRow(page, "אלבומים", "", loading && cachedAlbums == null ? "טוען..." :
+                (cachedAlbums == null ? 0 : cachedAlbums.size()) + " אלבומים", "▤", compact, compactRowHeight,
+                new Runnable() { @Override public void run() { if (!loading) openHomeCategory(TAB_ALBUMS, "אלבומים"); } });
         addHomeRow(page, "פלייליסטים", "", customPlaylists.size() + " רשימות אישיות", "☰", compact, compactRowHeight,
                 new Runnable() { @Override public void run() { openHomeCategory(TAB_PLAYLISTS, "פלייליסטים"); } });
         addHomeRow(page, "מיקסים", "", "רשימות לפי מצב רוח", "♫", compact, compactRowHeight,
-                new Runnable() { @Override public void run() { openHomeCategory(TAB_MIXES, "מיקסים"); } });
+                new Runnable() { @Override public void run() { if (!loading) openHomeCategory(TAB_MIXES, "מיקסים"); } });
+        addNightModeRow(page);
 
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(root);
+    }
+
+    private void addNightModeRow(LinearLayout page) {
+        TextView toggle = text(nightMode ? "☀  מעבר למצב יום" : "☾  הפעלת מצב לילה",
+                14, COLOR_TEXT, true);
+        toggle.setGravity(Gravity.CENTER);
+        toggle.setBackgroundDrawable(roundRect(COLOR_ROW, 9));
+        toggle.setFocusable(true);
+        toggle.setClickable(true);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(42));
+        params.setMargins(0, dp(4), 0, dp(2));
+        page.addView(toggle, params);
+        toggle.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                nightMode = !nightMode;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putBoolean(NIGHT_MODE_KEY, nightMode).apply();
+                applyThemePalette();
+                if (showingNowPlaying && activeTab == TAB_NOW_PLAYING) renderNowPlaying();
+                else renderBrowser();
+            }
+        });
+    }
+
+    private void applyThemePalette() {
+        if (nightMode) {
+            COLOR_DARK = 0xff171717;
+            COLOR_BAR = 0xff242424;
+            COLOR_ACCENT = 0xffbdbdbd;
+            COLOR_BG = 0xff303030;
+            COLOR_ROW = 0xff414141;
+            COLOR_TEXT = 0xfff5f5f5;
+            COLOR_SUB = 0xffc4c4c4;
+            COLOR_FOCUS = 0xff575757;
+            COLOR_FOCUS_PRESSED = 0xff686868;
+        } else {
+            COLOR_DARK = 0xff252525;
+            COLOR_BAR = 0xff383838;
+            COLOR_ACCENT = 0xff00b9cc;
+            COLOR_BG = 0xffcfd3d7;
+            COLOR_ROW = 0xffe1e4e7;
+            COLOR_TEXT = 0xff202020;
+            COLOR_SUB = 0xff777777;
+            COLOR_FOCUS = 0xffb7d2d6;
+            COLOR_FOCUS_PRESSED = 0xff9dbfc4;
+        }
     }
 
     private void addHomeRow(LinearLayout page, String title, String subtitle, String detail,
@@ -1223,7 +1301,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             search.setTextColor(COLOR_TEXT);
             search.setHintTextColor(COLOR_SUB);
             search.setPadding(dp(12), 0, dp(12), 0);
-            search.setBackgroundDrawable(roundRect(0xffffffff, 7));
+            search.setBackgroundDrawable(roundRect(COLOR_ROW, 7));
             LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(-1, dp(46));
             searchParams.setMargins(dp(8), dp(7), dp(8), dp(7));
             browserContent.addView(search, searchParams);
@@ -2137,12 +2215,9 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         showingNowPlaying = true;
         shuffleButton = null;
         repeatButton = null;
-        Drawable previousBackground = nowPlayingRoot == null ? null : nowPlayingRoot.getBackground();
-        Drawable previousArtwork = nowArt == null ? null : nowArt.getDrawable();
         nowPlayingRoot = new LinearLayout(this);
         nowPlayingRoot.setOrientation(LinearLayout.VERTICAL);
-        if (previousBackground != null) nowPlayingRoot.setBackgroundDrawable(previousBackground);
-        else nowPlayingRoot.setBackgroundColor(COLOR_BG);
+        nowPlayingRoot.setBackgroundColor(COLOR_BG);
 
         // Fixed layout. Artwork leaves enough room for the timeline and controls.
         // after the song details, timeline and transport controls are placed.
@@ -2156,9 +2231,7 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         nowArt.setScaleType(ImageView.ScaleType.FIT_CENTER);
         nowArt.setScaleX(isPlaying() ? 1f : 0.94f);
         nowArt.setScaleY(isPlaying() ? 1f : 0.94f);
-        // Reuse the previous cover while the next track artwork loads.
-        if (previousArtwork != null) nowArt.setImageDrawable(previousArtwork);
-        else nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
+        nowArt.setImageResource(R.drawable.albumart_mp_unknown_new);
         artHolder.setBackgroundColor(COLOR_BG);
         artHolder.addView(nowArt, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(-1, 0, 1.02f);
@@ -2250,6 +2323,26 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
 
         nowPlayingRoot.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(nowPlayingRoot);
+        loadArtworkAsync(currentSong, nowArt);
+        updatePlayerButtons();
+    }
+
+    /** Update the existing player screen in place when the track changes. */
+    private void updateNowPlayingForCurrentTrack() {
+        if (nowPlayingRoot == null || nowArt == null) {
+            renderNowPlaying();
+            return;
+        }
+        if (nowTitle != null) nowTitle.setText(currentSong == null ? "אין שיר נבחר" : displaySongTitle(currentSong.title));
+        if (nowArtist != null) nowArtist.setText(currentSong == null ? "" : currentSong.artist);
+        int duration = safeDuration();
+        if (seekBar != null) {
+            userSeeking = false;
+            seekBar.setMax(Math.max(1, duration));
+            updateSeekBarTimeline(0, duration);
+        }
+        if (elapsedText != null) elapsedText.setText("0:00");
+        if (durationText != null) durationText.setText(formatTime(duration));
         loadArtworkAsync(currentSong, nowArt);
         updatePlayerButtons();
     }
@@ -2598,29 +2691,28 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
         angledShape.close();
         canvas.drawPath(angledShape, decoration);
 
-        // A soft dark panel improves readability on both colours.
-        Paint textPanel = new Paint(Paint.ANTI_ALIAS_FLAG);
-        textPanel.setShader(new LinearGradient(0f, 220f, 0f, 545f,
-                new int[]{0x00030a13, 0x50030a13, 0x50030a13, 0x00030a13},
-                new float[]{0f, 0.16f, 0.84f, 1f}, Shader.TileMode.CLAMP));
-        canvas.drawRoundRect(new RectF(34f, 210f, size - 34f, 552f), 30f, 30f, textPanel);
-
         float[] titleHsv = new float[]{hueA, 0.42f, 1f};
         int titleColor = android.graphics.Color.HSVToColor(titleHsv);
         float[] artistHsv = new float[]{hueB, 0.52f, 1f};
         int artistColor = android.graphics.Color.HSVToColor(artistHsv);
 
+        String[] fontFamilies = new String[]{"sans-serif", "sans-serif-condensed",
+                "serif", "casual", "cursive"};
+        int fontSeed = (int) (seed ^ (seed >>> 32));
+        String titleFamily = fontFamilies[Math.abs(fontSeed % fontFamilies.length)];
+        String artistFamily = fontFamilies[Math.abs((fontSeed + 3) % fontFamilies.length)];
+
         TextPaint titlePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(titleColor);
-        titlePaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        titlePaint.setTextSize(title.length() > 48 ? 61f : (title.length() > 28 ? 74f : 88f));
-        titlePaint.setShadowLayer(17f, 0f, 5f, 0xb0000000);
+        titlePaint.setTypeface(Typeface.create(titleFamily, Typeface.BOLD));
+        titlePaint.setTextSize(title.length() > 48 ? 72f : (title.length() > 28 ? 86f : 100f));
+        titlePaint.setShadowLayer(9f, 0f, 3f, 0x88000000);
 
         TextPaint artistPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         artistPaint.setColor(artistColor);
-        artistPaint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        artistPaint.setTextSize(46f);
-        artistPaint.setShadowLayer(11f, 0f, 3f, 0xa0000000);
+        artistPaint.setTypeface(Typeface.create(artistFamily, Typeface.BOLD));
+        artistPaint.setTextSize(54f);
+        artistPaint.setShadowLayer(7f, 0f, 2f, 0x77000000);
 
         int textWidth = size - 112;
         StaticLayout titleLayout = new StaticLayout(title, titlePaint, textWidth,
@@ -3278,9 +3370,12 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             return;
         }
 
+        boolean reusePlayerScreen = showingNowPlaying && activeTab == TAB_NOW_PLAYING
+                && nowPlayingRoot != null && nowArt != null;
         showingNowPlaying = true;
         try {
-            renderNowPlaying();
+            if (reusePlayerScreen) updateNowPlayingForCurrentTrack();
+            else renderNowPlaying();
         } catch (RuntimeException error) {
             Log.e(TAG, "Could not render now-playing screen", error);
             // Audio remains independent from the artwork and player UI.
@@ -3497,8 +3592,14 @@ public class MainActivity extends Activity implements MediaPlayer.OnPreparedList
             try { old.release(); } catch (Exception ignored) { }
         }
         resetListenTracker();
-        if (activeTab == TAB_NOW_PLAYING || showingNowPlaying) renderNowPlaying();
-        else { updateMiniPlayerText(); updatePlayerButtons(); }
+        if (activeTab == TAB_NOW_PLAYING && showingNowPlaying && nowPlayingRoot != null && nowArt != null) {
+            updateNowPlayingForCurrentTrack();
+        } else if (showingNowPlaying) {
+            renderNowPlaying();
+        } else {
+            updateMiniPlayerText();
+            updatePlayerButtons();
+        }
         prepareNextPlayer();
     }
 
